@@ -5,6 +5,20 @@ Format: reverse-chronological. Dates are absolute (YYYY-MM-DD).
 
 ## [Unreleased]
 
+### 2026-10-17 — recon-engine: added toolchain installer (user's setup.sh) + README install steps
+- Added `skills/recon-engine/scripts/setup.sh` (user-supplied, inspected not executed;
+  secrets check clean — the subfinder provider-config it writes has empty `""`
+  placeholders only, downloads only from standard upstreams). Ubuntu 20.04/22.04/24.04
+  installer: Go 1.22 + the recon toolchain (subfinder, dnsx, httpx, katana, gospider,
+  nuclei, gowitness, gitleaks, naabu, gf, …), Python recon tools, gf patterns, nuclei
+  templates, ~1 GB SecLists, DNS resolvers, and shell/tmux env.
+- Wired "install the toolchain first" into `SKILL.md` and
+  `references/active-enumeration.md`: run `scripts/setup.sh` (Ubuntu, sudo) before the
+  first `recon.sh` run; `recon.sh`'s `check_tools` reports anything still missing.
+- Updated root `README.md` install section to the clone-and-copy steps
+  (`git clone … && cp -r skills/* ~/.claude/skills/ && cp -r commands/* ~/.claude/commands/`)
+  and added an "Optional: active recon toolchain" subsection documenting `setup.sh`.
+
 ### 2026-10-17 — recon-engine: added active-enumeration engine (user's recon.sh)
 - Integrated the user-supplied `recon.sh` as the **active** engine behind `recon-engine`
   at `skills/recon-engine/scripts/recon.sh` (inspected, not executed; no secrets — Slack/

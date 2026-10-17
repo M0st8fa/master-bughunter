@@ -28,6 +28,25 @@ script is the muscle (enumeration).
 `recon.py` is **not** superseded — it is the passive/API-source layer and the only one
 that runs where no tools are installed. The two are complementary.
 
+## Install the toolchain first (`scripts/setup.sh`)
+
+`recon.sh` only works once the Go bug-bounty suite is installed. Before the first run,
+have the user run the bundled installer **on their own machine**:
+
+```bash
+bash scripts/setup.sh
+```
+
+`setup.sh` targets **Ubuntu 20.04 / 22.04 / 24.04** and needs **sudo**. It installs Go
+1.22, the required and optional tools below (via `go install` + apt), Python recon tools
+(arjun, uro, paramspider, waymore, dnsgen), gf patterns, nuclei templates, **~1 GB of
+SecLists** wordlists under `/opt/wordlists` (with a `/usr/share/seclists` compat symlink),
+DNS resolver lists, and Go/recon env + a tmux config written to the shell profile. It
+writes an **empty-placeholder** subfinder provider-config at
+`~/.config/subfinder/provider-config.yaml` — adding API keys there is optional and only
+widens subdomain coverage. Do **not** run it in the sandbox. When it finishes,
+`recon.sh`'s own `check_tools` step re-verifies and names anything still missing.
+
 ## Required vs optional tools
 
 - **Required** (script exits if missing): `subfinder`, `waybackurls`, `katana`,

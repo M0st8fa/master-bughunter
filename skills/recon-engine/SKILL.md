@@ -16,12 +16,22 @@ handoff); the scripts are the **muscle** (enumeration).
   user's own machine where those tools are installed — not in this sandbox**; this skill
   never executes it for the user. Full guide: `references/active-enumeration.md`.
 
+**Install the toolchain first (for `recon.sh`).** `recon.sh` needs the Go bug-bounty
+suite installed. On a fresh Ubuntu (20.04/22.04/24.04) machine, have the user run
+`scripts/setup.sh` **before** the first `recon.sh` run — it installs Go + the toolchain
+(subfinder, dnsx, httpx, katana, gospider, nuclei, gowitness, gitleaks, naabu, gf, …),
+Python recon tools, nuclei templates, ~1 GB of SecLists wordlists, and shell/tmux env.
+It needs sudo and runs on the user's own machine, never the sandbox. After it finishes,
+`recon.sh`'s own `check_tools` reports anything still missing. `recon.py` (passive) needs
+none of this.
+
 ```bash
 # passive — always available
 python <skill_dir>/scripts/recon.py run --target example.com [--scope scope.txt] [--resolve] [--out DIR]
 # VT_API_KEY=<key> python recon.py run --target example.com   # adds VirusTotal provider
 
-# active — user runs this on their own machine; see references/active-enumeration.md
+# active — install the toolchain first (Ubuntu, sudo), then run on the user's own machine
+bash <skill_dir>/scripts/setup.sh                              # one-time toolchain install
 bash <skill_dir>/scripts/recon.sh -d example.com -o recon_example
 bash <skill_dir>/scripts/recon.sh -d example.com --nuclei --active-checks --params --ports
 ```

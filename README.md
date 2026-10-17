@@ -59,14 +59,15 @@ static validation, behavioral set pending). Full table in [`SKILL_INDEX.md`](SKI
 
 ## Install
 
-Full steps in [`docs/INSTALL.md`](docs/INSTALL.md). In short:
+Full steps in [`docs/INSTALL.md`](docs/INSTALL.md). Clone the repo and copy the skills and
+commands into your Claude Code scope:
 
 ```sh
-# Skills (personal scope, all projects)
+git clone https://github.com/M0st8fa/master-bughunter.git
+cd master-bughunter
+mkdir -p ~/.claude/skills ~/.claude/commands
 cp -r skills/* ~/.claude/skills/
-
-# Self-learning commands
-mkdir -p ~/.claude/commands && cp commands/*.md ~/.claude/commands/
+cp -r commands/* ~/.claude/commands/
 ```
 
 Then in Claude Code, run `/skills` to confirm they loaded (or just ask Claude to use
@@ -76,6 +77,24 @@ Then in Claude Code, run `/skills` to confirm they loaded (or just ask Claude to
 and a few skill scripts (stdlib only for the validator). Individual skills may *name*
 external tools (subfinder, httpx, nuclei, …) — none are bundled or assumed present; each
 skill documents its own needs.
+
+### Optional: active recon toolchain (for `recon-engine`'s `recon.sh`)
+
+The `recon-engine` skill has two engines: a passive `recon.py` (stdlib, no tools, runs
+anywhere) and an active `recon.sh` that drives the Go bug-bounty toolchain. To use the
+**active** engine, install the toolchain **first** with the bundled setup script:
+
+```sh
+bash skills/recon-engine/scripts/setup.sh
+```
+
+> ⚠️ **Ubuntu 20.04 / 22.04 / 24.04 only**, and it needs **sudo**. It installs a large
+> toolset (Go + subfinder, httpx, katana, gospider, nuclei, gowitness, gitleaks, naabu,
+> gf and more), Python recon tools, nuclei templates, and **~1 GB of SecLists** wordlists,
+> and writes Go/recon env to your shell profile. Run it on your **own** machine, never in a
+> sandbox. After it finishes, `recon.sh`'s own `check_tools` reports anything still missing.
+> Subfinder API keys are **optional** (empty placeholders are written to
+> `~/.config/subfinder/provider-config.yaml`) — add them for broader subdomain coverage.
 
 **Optional recon keys:** `recon-engine` can use VirusTotal/Shodan if keys are present via
 environment variables or a **git-ignored** `skills/recon-engine/keys.env` (copy from
