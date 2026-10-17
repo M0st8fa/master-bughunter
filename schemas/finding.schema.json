@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cybersecurity-skills/schemas/finding.schema.json",
+  "title": "Finding",
+  "description": "A single security finding produced by a specialist skill. Evidence-first: every claim must trace to an evidence artifact. No secrets or third-party PII in any field.",
+  "type": "object",
+  "required": ["id", "title", "vuln_class", "severity", "status", "authorization", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "description": "Stable local id, e.g. F-2026-001" },
+    "title": { "type": "string", "maxLength": 160 },
+    "target": { "type": "string", "description": "In-scope asset (host/endpoint). No credentials." },
+    "program": { "type": "string", "description": "Bounty/engagement program this is authorized under." },
+    "vuln_class": {
+      "type": "string",
+      "enum": ["xss","dom-xss","sqli","ssrf","csrf","rce","idor","bola","bac","privesc","bizlogic","race","upload","oauth-ato","graphql","pii-exposure","info-disclosure","crlf","cors","open-redirect","request-smuggling","cloud-iam","container-k8s","network-service","detection-gap","other"]
+    },
+    "cwe": { "type": "string", "pattern": "^CWE-[0-9]+$" },
+    "severity": { "type": "string", "enum": ["info","low","medium","high","critical"] },
+    "cvss": { "type": "string", "description": "CVSS vector or base score, optional." },
+    "status": {
+      "type": "string",
+      "enum": ["hypothesis","reproduced","validated","reported","resolved","false-positive"],
+      "description": "Lifecycle. 'hypothesis' until proven; only 'reproduced'+ may be reported."
+    },
+    "authorization": {
+      "type": "object",
+      "required": ["in_scope", "basis"],
+      "properties": {
+        "in_scope": { "type": "boolean" },
+        "basis": { "type": "string", "description": "Why this is authorized (program scope URL / engagement ref)." }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["kind", "ref"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["request-response","screenshot","log","tool-output","poc-file","own-account-poc"] },
+          "ref": { "type": "string", "description": "Path/reference to the artifact. Own-account PoCs only for cross-account bugs." },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "impact": { "type": "string" },
+    "chain": { "type": "array", "items": { "type": "string" }, "description": "Ordered steps if chained to higher impact." },
+    "tested_negative": { "type": "array", "items": { "type": "string" }, "description": "What was tried and did NOT work (reduces false positives, aids reviewers)." },
+    "remediation": { "type": "string" },
+    "confidence": { "type": "string", "enum": ["low","medium","high"] },
+    "discovered_at": { "type": "string", "format": "date" },
+    "skills_used": { "type": "array", "items": { "type": "string" } }
+  }
+}

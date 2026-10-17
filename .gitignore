@@ -1,0 +1,14 @@
+# Never commit real provider keys — only the *.example template is tracked.
+keys.env
+**/keys.env
+*.env
+!*.env.example
+
+# Compiled / cache artifacts
+__pycache__/
+*.pyc
+*.pyo
+
+# Local scratch
+*.log
+.DS_Store

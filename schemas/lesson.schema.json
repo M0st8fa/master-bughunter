@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cybersecurity-skills/schemas/lesson.schema.json",
+  "title": "Lesson",
+  "description": "A generalized, de-identified lesson for LEARNING_LOG. No secrets, credentials, PII, or target-specific identifiers.",
+  "type": "object",
+  "required": ["id", "lesson", "evidence_class", "applies_to"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "lesson": { "type": "string", "description": "The generalizable statement." },
+    "evidence_class": {
+      "type": "string",
+      "enum": ["verified", "hypothesis", "failed"],
+      "description": "verified = reproduced/primary-source; hypothesis = plausible untested; failed = tried, did not hold."
+    },
+    "applies_to": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Skill names." },
+    "provenance": { "type": "string", "description": "De-identified origin (task id / source)." },
+    "how_to_apply": { "type": "string" },
+    "environment_caveat": { "type": "string", "description": "Where it held; guards against over-generalizing a single success." },
+    "added_at": { "type": "string", "format": "date" }
+  }
+}

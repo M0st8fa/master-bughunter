@@ -1,0 +1,145 @@
+# recon-engine — Active enumeration engine (`scripts/recon.sh`)
+
+`recon.sh` is the heavy active-enumeration engine behind this skill. Where `recon.py`
+is a passive, keyless, sandbox-safe intelligence collector, `recon.sh` chains the
+standard Go bug-bounty tool suite for breadth and speed on a scoped target you are
+authorized to test. The skill is the brain (scope, decisioning, triage, handoff); the
+script is the muscle (enumeration).
+
+> **Runtime caveat — read first.** `recon.sh` is a Bash pipeline that shells out to
+> external tools (subfinder, dnsx, httpx, katana, …). It only works on a machine where
+> those tools are installed, and it must be run **by the user, on the user's own
+> machine**, against a target inside an authorized program's scope. It does **not** run
+> inside this project's sandbox, and this skill never executes it on the user's behalf.
+> Claude's job is to prepare scope, tell the user the exact command, and then interpret
+> the files the run produces.
+
+## When to use which engine
+
+| Situation | Engine |
+|---|---|
+| No tools installed / inside the sandbox / first-pass passive map | `recon.py` (passive) |
+| Keyless CT + archive + RDAP intel, no traffic to target but DNS | `recon.py` (passive) |
+| User has the Go toolchain and an authorized, scoped target | `recon.sh` (active) |
+| Want brute-force DNS, live HTTP probing, crawling, classification | `recon.sh` (active) |
+| Opt-in active checks (CORS, `.git`, open-redirect, ports, nuclei) | `recon.sh` (active) |
+| Best practice | run `recon.py` for passive breadth, then `recon.sh` for depth on the resolved in-scope set |
+
+`recon.py` is **not** superseded — it is the passive/API-source layer and the only one
+that runs where no tools are installed. The two are complementary.
+
+## Required vs optional tools
+
+- **Required** (script exits if missing): `subfinder`, `waybackurls`, `katana`,
+  `gospider`, `httpx`, `anew`, `unfurl`, `dig`.
+- **Optional** (feature silently disabled if absent, with a warning): `dnsx` (DNS
+  brute-force + resolution + CNAME/wildcard mapping), `gau` (Common Crawl/OTX URLs),
+  `nuclei`, `gowitness`/`aquatone` (screenshots), `gitleaks` (JS secret scan), `arjun`
+  (param guessing), `naabu` (port scan), `subzy` (subdomain takeover), `qsreplace`
+  (open-redirect payload injection), `jq` (httpx JSON parsing — without it the status
+  split and tech summary are skipped), `amass`.
+- A DNS wordlist enables brute-force; the script searches several SecLists locations
+  (`WORDLIST_FALLBACKS`) or takes `-w <wordlist>`. No wordlist → brute-force skipped.
+
+## How to run it
+
+```bash
+# single target
+bash recon.sh -d example.com -o recon_example
+
+# multiple roots from a file
+bash recon.sh -l roots.txt -o recon_out -t 100
+
+# passive-ish pass (skip crawlers), then a fuller active pass
+bash recon.sh -d example.com --skip-gospider --skip-katana
+bash recon.sh -d example.com --nuclei --screenshots --params --ports \
+              --test-redirects --active-checks
+```
+
+Key flags: `-t` threads (50), `-r` httpx rate req/s (150), `-D` katana depth (3),
+`-T` timeout (10s), `-w` wordlist, `-R` resolvers, `--resume` resume a prior output dir,
+`--skip-*` to drop modules, `--slack`/`--discord <webhook>` for a summary ping. The
+opt-in modules (`--nuclei`, `--screenshots`, `--gitleaks`, `--params`, `--ports`,
+`--test-redirects`, `--active-checks`) are **off by default** — they send active traffic
+to the target, so only enable them inside program scope. Run `bash recon.sh -h` for the
+full option list.
+
+## Output layout (`$OUTPUT_DIR/`)
+
+```
+subdomains/   subfinder.txt, brute_force.txt, all_subdomains.txt, dnsx_resolved.txt,
+              cname_map.txt, interesting_subs.txt, zone_transfer_subs.txt
+urls/         waybackurls.txt, gau.txt, katana.txt, gospider.txt, allurls.txt (in-scope,
+              static assets stripped) + ~30 classified buckets (see below)
+httpx/        httpx_all.json (structured), httpx_all.txt, httpx<CODE>.txt split by exact
+              status_code, httpx_other.txt, tech_summary.txt, potential_wp_sites.txt
+dns/          nameservers.txt, zone_transfers.txt, txt_records.txt, dnssec_check.txt,
+              mx_records.txt, cname_records.txt, ipv6.txt, cloud_storage_*.txt, s3_amazon.txt
+vuln/         nuclei_results.txt, nuclei_critical.txt, nuclei_cves.txt, exposed_panels.txt,
+              default_logins.txt, subdomain_takeover.txt, open_redirect_confirmed.txt,
+              cors_misconfig.txt, git_exposure.txt
+ports/        open_ports.txt + per-host files        params/   per-domain + all_params.txt
+screenshots/  gowitness/aquatone output               leaks/    gitleaks_report.json, grep_secrets.txt
+logs/         per-tool stderr + run_config.txt         reports/  summary.md
+```
+
+### URL classification buckets (the triage leads)
+`classify_urls()` greps `allurls.txt` into ~30 buckets by extension and parameter name:
+`php/asp/aspx/jsp/js/config_js`, `apis_all`, `api_docs_endpoints` (swagger/graphql),
+`backups`, `archives_dbs`, `secrets` (`.env/.pem/.key/…`), `data_configs`, `logs`,
+`documents`, `dev_scripts`, `lfi_params`, `redirect_ssrf`, `idor_params`, `admin_panels`,
+`dev_envs`, `sensitive_keywords`, `ssrf_internal`, `xss_params`, `sqli_params`,
+`upload_params`, `debug_endpoints`, `oauth_endpoints`, `aws_s3`, `jwt_endpoints`,
+`others`.
+
+## Scope discipline (how the script enforces it)
+
+- `prepare_domains()` snapshots the **original roots** to `root_domains.txt` *before*
+  subdomain enumeration appends discovered hosts into `alldomains.txt`.
+- `filter_in_scope()` then drops every URL whose host is not one of those roots or a
+  subdomain of one — so social-media, CDN and third-party links that crawlers pick up
+  from `<a href>`/`<script src>` are removed from `allurls.txt`.
+- **This is only as good as the roots you give it.** Confirm the program's declared
+  scope first and pass exactly the in-scope roots. Out-of-scope hosts the script
+  surfaces (e.g. in `subfinder.txt`) are intel/context, never test targets.
+
+## Where recon.sh is stronger than recon.py
+
+- **Active subdomain discovery:** subfinder (all sources, recursive) + dnsx DNS
+  brute-force + zone-transfer (AXFR) attempts + subzy takeover checks. `recon.py` is
+  passive CT/intel only.
+- **URL discovery depth:** katana + gospider live crawling and gau, on top of Wayback —
+  it finds endpoints that only exist by crawling the live app, not just archives.
+- **Liveness + fingerprint:** real httpx probing (status, title, tech, length,
+  redirects) parsed from JSON, with an exact-status-code split and a tech summary.
+  `recon.py` gives names, not liveness.
+- **Richer classification:** ~30 parameter/extension buckets vs the passive skill's
+  juicy-URL flagging.
+- **Opt-in active checks** the passive skill has no concept of: nuclei, screenshots,
+  gitleaks on downloaded JS, arjun params, naabu ports, active CORS / `.git` /
+  open-redirect verification.
+
+Where `recon.py` still wins: it is keyless, passive, sandbox-safe, needs no tool
+install, and gives the asset↔source↔scan separation (`sources` column) and the strict
+`providers.json` provenance that active crawling does not produce.
+
+## Feeding the output into the hunt skills
+
+1. **Read what actually ran first.** `logs/run_config.txt` + each `logs/*.log` are the
+   active-engine equivalent of `providers.json`: a tool that errored or was missing
+   proves nothing about the target. A missing optional tool means that signal is
+   absent-because-not-run, never absent-because-clean.
+2. **Scope-filter is already applied** to `urls/allurls.txt`; still treat anything the
+   run surfaces outside the confirmed program scope as context only.
+3. **Hand off by class:**
+   - `httpx/httpx_all.json`, `urls/js.txt`, `urls/config_js.txt` → `js-recon` / `js-audit`
+   - `urls/sqli_params.txt` → `bb-sqli`; `redirect_ssrf.txt` → `bb-ssrf`;
+     `idor_params.txt` → `idor-runner` / `bb-authz`; `xss_params.txt` → `bb-xss`;
+     `upload_params.txt` → `bb-upload`; `oauth_endpoints.txt` → `bb-oauth`;
+     `admin_panels.txt` → `bb-authz`
+   - `subdomains/cname_map.txt` + `vuln/subdomain_takeover.txt` → takeover review
+   - `vuln/*` (nuclei, CORS, `.git`, open-redirect) → **leads to re-verify manually**,
+     then `vuln-report` (strict 5-section template)
+4. **Every `vuln/` hit is a lead, not a finding.** nuclei output, reflected-CORS and
+   `.git` hits must be reproduced by hand before they enter a report. Recon observations
+   go to the report's intel section, never its findings section.
