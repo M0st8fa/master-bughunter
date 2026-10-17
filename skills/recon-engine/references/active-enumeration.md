@@ -77,11 +77,37 @@ bash recon.sh -d example.com --nuclei --screenshots --params --ports \
 
 Key flags: `-t` threads (50), `-r` httpx rate req/s (150), `-D` katana depth (3),
 `-T` timeout (10s), `-w` wordlist, `-R` resolvers, `--resume` resume a prior output dir,
-`--skip-*` to drop modules, `--slack`/`--discord <webhook>` for a summary ping. The
+`--skip-*` to drop modules, `--slack`/`--discord <webhook>` or `--telegram` for
+notifications (see below). The
 opt-in modules (`--nuclei`, `--screenshots`, `--gitleaks`, `--params`, `--ports`,
 `--test-redirects`, `--active-checks`) are **off by default** — they send active traffic
 to the target, so only enable them inside program scope. Run `bash recon.sh -h` for the
 full option list.
+
+## Notifications (Slack / Discord / Telegram)
+
+`recon.sh` can push the end-of-run summary (subdomains / URLs / live / nuclei counts +
+output dir) to a channel, and — for **Telegram** — also fire a short alert the moment a
+high-signal finding is confirmed.
+
+- **Slack / Discord:** `--slack <webhook>` / `--discord <webhook>` (summary only).
+- **Telegram:** `--telegram <bot_token>:<chat_id>` **or** export `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_CHAT_ID` (env keeps the token out of shell history; the flag overrides env
+  when both are given). Because a bot token itself contains a `:`, the flag value is split
+  on its **last** colon. The token is a credential — pass it at runtime only, never commit
+  it. Telegram is **opt-in**: with nothing configured, all notify calls are silent no-ops.
+- **Per-finding Telegram alerts** fire on confirmed/high-signal findings only — zone
+  transfer, subdomain takeover (subzy), nuclei critical/high, confirmed open redirect,
+  CORS misconfig, exposed `.git`, public cloud bucket, and secrets found. Secret **values**
+  are never sent — only the finding type, affected host/URL, and counts/location.
+
+```bash
+# token out of shell history
+export TELEGRAM_BOT_TOKEN='123456789:AA...'; export TELEGRAM_CHAT_ID='123456789'
+bash recon.sh -d example.com --nuclei --active-checks
+# or inline
+bash recon.sh -d example.com --active-checks --telegram '123456789:AA...:123456789'
+```
 
 ## Output layout (`$OUTPUT_DIR/`)
 

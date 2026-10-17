@@ -5,6 +5,25 @@ Format: reverse-chronological. Dates are absolute (YYYY-MM-DD).
 
 ## [Unreleased]
 
+### 2026-10-17 — recon-engine: Telegram notifications in recon.sh (run summary + per-finding alerts)
+- Added Telegram support to `scripts/recon.sh`, mirroring the existing Slack/Discord notify
+  pattern. Config via `--telegram <bot_token>:<chat_id>` (split on the last colon, since bot
+  tokens contain a `:`) OR `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` env vars (flag overrides
+  env). Added to `parse_args`, `usage()`, and the NOTIFICATIONS section.
+- New `telegram_notify()` helper (POSTs to `api.telegram.org/bot<token>/sendMessage` with
+  `--data-urlencode`, `parse_mode=HTML`, `disable_web_page_preview=true`, bounded timeout,
+  `|| true`); no-ops quietly when unconfigured. `send_notification()` now also sends the
+  end-of-run summary to Telegram.
+- New per-finding alerts (opt-in, high-signal only) via `telegram_finding()`, wired into:
+  zone-transfer vulnerable, subdomain takeover (subzy, confirmed only), nuclei
+  critical/high, confirmed open redirect, CORS misconfig, exposed `.git`, public cloud
+  bucket, and secrets found. Secret **values** are never sent — only type/host/counts.
+- **Secrets:** bot token/chat id come only from the flag or env at runtime; nothing
+  hardcoded. Added empty `TELEGRAM_BOT_TOKEN=`/`TELEGRAM_CHAT_ID=` placeholders +
+  docs to `keys.env.example`; `.gitignore` still blocks real `*.env`/`keys.env`.
+- Docs: Telegram option added to `SKILL.md`, `references/active-enumeration.md`, and the
+  README notifications area.
+
 ### 2026-10-17 — recon-engine: added toolchain installer (user's setup.sh) + README install steps
 - Added `skills/recon-engine/scripts/setup.sh` (user-supplied, inspected not executed;
   secrets check clean — the subfinder provider-config it writes has empty `""`

@@ -45,6 +45,10 @@ RUN_ACTIVE_CHECKS=false
 NOTIFY=false
 SLACK_WEBHOOK=""
 DISCORD_WEBHOOK=""
+# Telegram — never hardcode a token here. Values come from the --telegram flag
+# or the TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID environment variables at runtime.
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 VERBOSE=false
 RESUME=false
 WORDLIST="/opt/wordlists/dns/subdomains-top5000.txt"
@@ -121,8 +125,15 @@ ${BOLD}EXTRA MODULES (opt-in):${RESET}
   --resume              Resume from existing output directory
 
 ${BOLD}NOTIFICATIONS:${RESET}
-  --slack   <webhook>   Send summary to Slack
-  --discord <webhook>   Send summary to Discord
+  --slack    <webhook>          Send summary to Slack
+  --discord  <webhook>          Send summary to Discord
+  --telegram <bot_token>:<chat_id>
+                                Send run summary AND per-finding alerts to Telegram.
+                                A bot token itself contains a ':', so the value is split
+                                on its LAST colon (everything after = chat_id).
+                                You can instead export TELEGRAM_BOT_TOKEN and
+                                TELEGRAM_CHAT_ID (keeps the token out of shell history);
+                                the --telegram flag overrides the env vars when given.
 
 ${BOLD}EXAMPLES:${RESET}
   $0 -d example.com
@@ -130,6 +141,7 @@ ${BOLD}EXAMPLES:${RESET}
   $0 -d example.com --skip-wayback --skip-gospider --nuclei
   $0 -d example.com --resume -o recon_20240601_120000
   $0 -d example.com --test-redirects --active-checks --params --ports
+  TELEGRAM_BOT_TOKEN=123:AA.. TELEGRAM_CHAT_ID=99 $0 -d example.com --nuclei --active-checks
 
 EOF
     exit 0
@@ -327,6 +339,7 @@ zone_transfer_check() {
                     echo ""
                 } >> "$zt_out"
                 found=$((found+1))
+                telegram_finding "Zone transfer VULNERABLE" "$domain via $ns"
                 # Extract subdomains from zone transfer
                 echo "$result" | grep -oP "[\w.-]+\.$domain" | sort -u \
                     >> "$OUTPUT_DIR/subdomains/zone_transfer_subs.txt" 2>/dev/null || true
@@ -449,6 +462,14 @@ subdomain_enum() {
         info "Checking subdomain takeover with subzy..."
         subzy run --targets "$merged" --timeout "$TIMEOUT" \
             --output "$OUTPUT_DIR/vuln/subdomain_takeover.txt" 2>/dev/null || true
+        # Alert only on CONFIRMED takeovers (handles both subzy JSON and text output;
+        # must not match "vulnerable": false).
+        local to_file="$OUTPUT_DIR/vuln/subdomain_takeover.txt" to_hits
+        to_hits=$(grep -ciE '"vulnerable"[[:space:]]*:[[:space:]]*true|\[[[:space:]]*VULNERABLE' "$to_file" 2>/dev/null || echo 0)
+        if [[ "$to_hits" -gt 0 ]]; then
+            telegram_finding "Subdomain takeover ($to_hits)" \
+                "$(grep -iE '"vulnerable"[[:space:]]*:[[:space:]]*true|\[[[:space:]]*VULNERABLE' "$to_file" 2>/dev/null | head -5)"
+        fi
     fi
 }
 
@@ -695,6 +716,11 @@ run_nuclei() {
     log "Nuclei findings: $(wc -l < "$nuclei_out" 2>/dev/null || echo 0)"
     log "Critical/High: $(wc -l < "$nuclei_critical" 2>/dev/null || echo 0)"
 
+    local ch_cnt; ch_cnt=$(wc -l < "$nuclei_critical" 2>/dev/null || echo 0)
+    if [[ "$ch_cnt" -gt 0 ]]; then
+        telegram_finding "Nuclei critical/high ($ch_cnt)" "$(head -5 "$nuclei_critical" 2>/dev/null)"
+    fi
+
     # Run specific checks
     # CVE checks only
     nuclei -l "$httpx200" -t "$NUCLEI_TEMPLATES/cves/" \
@@ -768,6 +794,16 @@ run_gitleaks() {
         "$download_dir/" > "$secrets_dir/grep_secrets.txt" 2>/dev/null || true
 
     log "Secrets scan done. Check: $secrets_dir/"
+
+    # Alert on counts + location only — never send the secret values to Telegram.
+    local gl_cnt=0 sec_cnt=0
+    [[ -s "$secrets_dir/gitleaks_report.json" ]] && \
+        gl_cnt=$(grep -c '"RuleID"' "$secrets_dir/gitleaks_report.json" 2>/dev/null || echo 0)
+    [[ -s "$secrets_dir/grep_secrets.txt" ]] && \
+        sec_cnt=$(wc -l < "$secrets_dir/grep_secrets.txt" 2>/dev/null || echo 0)
+    if [[ "$gl_cnt" -gt 0 || "$sec_cnt" -gt 0 ]]; then
+        telegram_finding "Secrets found" "gitleaks hits: $gl_cnt, inline matches: $sec_cnt (see $secrets_dir/ — values not sent)"
+    fi
 }
 
 # ─────────────────────────────────────────────
@@ -798,7 +834,10 @@ cloud_storage_check() {
             code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time "$TIMEOUT" "$url" 2>/dev/null || echo "000")
             if [[ "$code" == "200" || "$code" == "403" ]]; then
                 echo "[$code] $url" >> "$OUTPUT_DIR/dns/cloud_storage_results.txt"
-                [[ "$code" == "200" ]] && warn "PUBLIC bucket: $url"
+                if [[ "$code" == "200" ]]; then
+                    warn "PUBLIC bucket: $url"
+                    telegram_finding "Public cloud bucket" "$url"
+                fi
             fi
         done < "$OUTPUT_DIR/dns/cloud_storage_urls.txt"
     fi
@@ -925,6 +964,8 @@ test_open_redirects() {
     found_count=$(grep -c "^URL" "$outfile" 2>/dev/null || echo 0)
     if [[ "$found_count" -gt 0 ]]; then
         warn "${BOLD}Open redirect CONFIRMED on $found_count URL(s)! → $outfile${RESET}"
+        telegram_finding "Open redirect confirmed ($found_count)" \
+            "$(grep '^URL' "$outfile" 2>/dev/null | sed 's/^URL *: *//' | head -5)"
     else
         log "No confirmed open redirects (tested $count URLs)"
     fi
@@ -966,7 +1007,12 @@ check_cors() {
 
     rm -f "$hosts_file"
     local cnt; cnt=$(wc -l < "$outfile" 2>/dev/null || echo 0)
-    [[ $cnt -gt 0 ]] && warn "CORS issues found: $cnt → $outfile" || log "No CORS issues found"
+    if [[ $cnt -gt 0 ]]; then
+        warn "CORS issues found: $cnt → $outfile"
+        telegram_finding "CORS misconfig ($cnt)" "$(head -5 "$outfile" 2>/dev/null)"
+    else
+        log "No CORS issues found"
+    fi
 }
 
 check_git_exposure() {
@@ -988,7 +1034,12 @@ check_git_exposure() {
     ' 2>/dev/null || true
 
     local cnt; cnt=$(wc -l < "$outfile" 2>/dev/null || echo 0)
-    [[ $cnt -gt 0 ]] && warn "${BOLD}.git exposure found: $cnt! → $outfile${RESET}" || log "No .git exposure found"
+    if [[ $cnt -gt 0 ]]; then
+        warn "${BOLD}.git exposure found: $cnt! → $outfile${RESET}"
+        telegram_finding "Exposed .git ($cnt)" "$(head -5 "$outfile" 2>/dev/null)"
+    else
+        log "No .git exposure found"
+    fi
 }
 
 run_active_checks() {
@@ -1002,6 +1053,33 @@ run_active_checks() {
 # ─────────────────────────────────────────────
 # NOTIFICATIONS
 # ─────────────────────────────────────────────
+
+# HTML-escape dynamic text before it goes into a parse_mode=HTML message.
+_tg_escape() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+
+# Low-level Telegram sender. No-ops quietly unless both token and chat id are set.
+# Resilient: bounded timeout, never aborts the run on failure.
+telegram_notify() {
+    [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]] && return 0
+    local text="$1"
+    curl -s --max-time 15 -X POST \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+        --data-urlencode "text=${text}" \
+        --data "parse_mode=HTML" \
+        --data "disable_web_page_preview=true" > /dev/null 2>&1 || true
+}
+
+# Per-finding alert: $1 = short type label, $2 = affected host/url/detail.
+# Opt-in — fires only when Telegram is configured (guard in telegram_notify).
+# Never send secret VALUES here, only finding type + location/counts.
+telegram_finding() {
+    [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]] && return 0
+    telegram_notify "🚨 <b>Finding: $(_tg_escape "$1")</b>
+Target: $(_tg_escape "${DOMAIN:-$DOMAIN_LIST}")
+$(_tg_escape "$2")"
+}
+
 send_notification() {
     [[ "$NOTIFY" == false ]] && return
 
@@ -1029,6 +1107,17 @@ Output: $OUTPUT_DIR"
         curl -s -X POST -H 'Content-type: application/json' \
             --data "{\"content\":\"$msg\"}" "$DISCORD_WEBHOOK" > /dev/null 2>&1 || true
         log "Discord notification sent"
+    fi
+
+    if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
+        telegram_notify "✅ <b>Recon Complete</b>
+Target: $(_tg_escape "${DOMAIN:-$DOMAIN_LIST}")
+Subdomains: $total_subs
+URLs: $total_urls
+Live (200): $total_httpx200
+Nuclei findings: $total_vulns
+Output: $(_tg_escape "$OUTPUT_DIR")"
+        log "Telegram notification sent"
     fi
 }
 
@@ -1182,10 +1271,20 @@ parse_args() {
             --resume)             RESUME=true; shift ;;
             --slack)              NOTIFY=true; SLACK_WEBHOOK="$2"; shift 2 ;;
             --discord)            NOTIFY=true; DISCORD_WEBHOOK="$2"; shift 2 ;;
+            --telegram)           NOTIFY=true
+                                  # Split on the LAST ':' — the bot token itself contains one.
+                                  TELEGRAM_CHAT_ID="${2##*:}"
+                                  TELEGRAM_BOT_TOKEN="${2%:*}"
+                                  shift 2 ;;
             -h|--help)            usage ;;
             *) err "Unknown option: $1"; usage ;;
         esac
     done
+
+    # Telegram can be configured purely via env vars (no flag in shell history).
+    if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
+        NOTIFY=true
+    fi
 
     # Validation
     if [[ -z "$DOMAIN" && -z "$DOMAIN_LIST" ]]; then

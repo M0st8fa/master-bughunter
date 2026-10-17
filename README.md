@@ -96,6 +96,21 @@ bash skills/recon-engine/scripts/setup.sh
 > Subfinder API keys are **optional** (empty placeholders are written to
 > `~/.config/subfinder/provider-config.yaml`) — add them for broader subdomain coverage.
 
+**Notifications (optional).** `recon.sh` can push the end-of-run summary to Slack, Discord
+or Telegram, and when **Telegram** is configured it also sends a concise alert on each
+confirmed high-signal finding (zone transfer, subdomain takeover, nuclei critical/high,
+open redirect, CORS misconfig, exposed `.git`, public cloud bucket, secrets). Enable
+Telegram with `--telegram <bot_token>:<chat_id>` or by exporting `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_CHAT_ID` (env keeps the token out of shell history). The bot token is a
+credential — it is read at runtime only and never committed; secret *values* are never
+sent, only finding type/location. It's opt-in: with nothing set, notifications are silent
+no-ops.
+
+```sh
+export TELEGRAM_BOT_TOKEN='123456789:AA...'; export TELEGRAM_CHAT_ID='123456789'
+bash skills/recon-engine/scripts/recon.sh -d example.com --nuclei --active-checks
+```
+
 **Optional recon keys:** `recon-engine` can use VirusTotal/Shodan if keys are present via
 environment variables or a **git-ignored** `skills/recon-engine/keys.env` (copy from
 `keys.env.example`). **Never commit real keys.** Without keys, those providers are skipped.

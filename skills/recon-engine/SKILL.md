@@ -34,7 +34,16 @@ python <skill_dir>/scripts/recon.py run --target example.com [--scope scope.txt]
 bash <skill_dir>/scripts/setup.sh                              # one-time toolchain install
 bash <skill_dir>/scripts/recon.sh -d example.com -o recon_example
 bash <skill_dir>/scripts/recon.sh -d example.com --nuclei --active-checks --params --ports
+# notify: --slack/--discord <webhook> (summary); --telegram <bot_token>:<chat_id> OR
+#   TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID env — Telegram also sends per-finding alerts
 ```
+
+**Notifications.** `recon.sh` pushes the end-of-run summary to Slack/Discord/Telegram,
+and when Telegram is configured it also fires a concise alert on each confirmed
+high-signal finding (zone transfer, takeover, nuclei critical/high, open redirect, CORS,
+exposed `.git`, public bucket, secrets). Opt-in; the bot token is passed at runtime (flag
+or env), never committed; secret values are never sent. Full setup:
+`references/active-enumeration.md`.
 
 ## Which engine
 
