@@ -55,26 +55,40 @@ _SECRET_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----"),
     re.compile(r"(?i)\b[a-z0-9]+=[A-Za-z0-9+/]{24,}={0,2}(?:;|\s|$)"),  # cookie=base64blob
 ]
-_PLACEHOLDER = re.compile(r"(?i)(your|xxx+|changeme|placeholder|example|<[^>]+>|dummy|redacted|\.\.\.|\benv:)")
+# A value is exempt only when the WHOLE value is a placeholder (a `<...>` marker or an
+# env: reference), never because a placeholder word appears somewhere inside a real
+# secret (e.g. "Bearer eyJ... (see example.com)" must NOT be exempt).
+_PLACEHOLDER = re.compile(r"(?i)\s*(<[^>]+>|env:\S*|xxx+|changeme|placeholder|dummy|redacted|your[\w\-]*|\.\.\.)\s*")
+# Keys under which ANY non-placeholder string is treated as a credential, even when the
+# value itself has no obvious secret shape (e.g. a short opaque Authorization/Cookie value).
+_SENSITIVE_KEY = re.compile(r"(?i)(authorization|cookie|set-cookie|api[_-]?key|x[_-]?api[_-]?key|token|secret|passwd|password)")
 
 
 class SecretInState(ValueError):
     pass
 
 
+def _is_placeholder(value: str) -> bool:
+    return bool(_PLACEHOLDER.fullmatch(value.strip())) if isinstance(value, str) else False
+
+
 def looks_secret(value: str) -> bool:
-    if not isinstance(value, str) or _PLACEHOLDER.search(value):
+    if not isinstance(value, str) or _is_placeholder(value):
         return False
     return any(p.search(value) for p in _SECRET_PATTERNS)
 
 
 def redact_guard(obj, path="manifest"):
-    """Raise SecretInState if any string in obj looks like a real secret."""
+    """Raise SecretInState if any string in obj looks like a real secret, or if any
+    non-placeholder string is stored under a sensitive key (checks dict KEYS too)."""
     if isinstance(obj, str):
         if looks_secret(obj):
             raise SecretInState(f"secret-shaped value refused at {path}: {obj[:24]}...")
     elif isinstance(obj, dict):
         for k, v in obj.items():
+            if isinstance(v, str) and v.strip() and _SENSITIVE_KEY.search(str(k)) \
+                    and not _is_placeholder(v):
+                raise SecretInState(f"value under sensitive key refused at {path}.{k}")
             redact_guard(v, f"{path}.{k}")
     elif isinstance(obj, (list, tuple)):
         for i, v in enumerate(obj):
@@ -155,9 +169,11 @@ def save(workspace: str, manifest: dict) -> str:
     redact_guard(manifest)
     os.makedirs(workspace, exist_ok=True)
     p = manifest_path(workspace)
-    with open(p, "w", encoding="utf-8") as f:
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
         f.write("\n")
+    os.replace(tmp, p)  # atomic: a crash mid-write never truncates the manifest
     return p
 
 
@@ -360,9 +376,11 @@ def build_parser():
     c.set_defaults(func=cmd_classify)
 
     st = sub.add_parser("set")
-    st.add_argument("--phase")
-    st.add_argument("--recon-status", dest="recon_status")
-    st.add_argument("--recon-engine", dest="recon_engine")
+    st.add_argument("--phase", choices=PHASE_ORDER)
+    st.add_argument("--recon-status", dest="recon_status",
+                    choices=["none", "running", "complete", "imported", "stale", "failed"])
+    st.add_argument("--recon-engine", dest="recon_engine",
+                    choices=["recon.sh", "recon.py", "imported", "none"])
     st.add_argument("--recon-dir", dest="recon_dir")
     st.add_argument("--inventory")
     st.add_argument("--excluded-inventory", dest="excluded_inventory")

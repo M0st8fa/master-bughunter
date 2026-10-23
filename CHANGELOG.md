@@ -49,6 +49,20 @@ Format: reverse-chronological. Dates are absolute (YYYY-MM-DD).
   `scenarios.md`; new scenarios added to security-hunt/recon-engine/bb-pipeline.
 - **Boundaries preserved:** no scope enforcement removed, `docs/SAFETY.md` intact and
   strengthened, validator/quality rules unchanged, no secrets in state/logs/reports.
+- **Review hardening (CodeRabbit pass):** secret guard now inspects dict **keys** (a
+  value under a sensitive key like `Authorization`/`Cookie` is refused even when shapeless)
+  and only exempts a value that is wholly a placeholder (a placeholder word inside a real
+  secret no longer disables it); engagement/inventory writes are **atomic** (`os.replace`)
+  so resume state survives a crash mid-write; `ingest_recon.py` now **redacts credential
+  query-params** (`token`, `access_token`, `sig`, …) before persisting a URL, matches
+  run-log/config files by whole filename/extension (so `login_urls.json`,
+  `blog_endpoints.jsonl`, `catalog.csv` are no longer silently dropped) and records
+  `files_skipped`, merges tool status by **severity** (a later `failed` is never hidden by
+  an earlier `ok`), and **reclassifies** stored inventory rows when scope/exclusions change
+  on re-ingest (a newly-excluded host leaves the hunt queue). `engagement.py set` validates
+  `--phase/--recon-status/--recon-engine` against the schema enums. Active-recon decision
+  table restricts `setup.sh` (sudo) to a trusted user-owned host. Tests: 38 checks (adds
+  real `init` reuse/conflict coverage, URL-redaction, log-filename, and reclassify cases).
 
 ### 2026-10-17 — recon-engine: Telegram notifications in recon.sh (run summary + per-finding alerts)
 - Added Telegram support to `scripts/recon.sh`, mirroring the existing Slack/Discord notify

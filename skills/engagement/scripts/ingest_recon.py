@@ -31,7 +31,7 @@ import json
 import os
 import re
 import sys
-from urllib.parse import urlsplit, parse_qsl
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -39,9 +39,57 @@ if _HERE not in sys.path:
 import engagement as eng  # noqa: E402  (scope matching + manifest io)
 
 URL_RE = re.compile(r"https?://[^\s'\"<>\\|)\]}]+", re.IGNORECASE)
-# files that are logs/config, parsed for tool status rather than as URL lists
-LOG_HINTS = ("log", "run_config", "summary", "recon_notes", "providers", "config")
 MAX_FILE_BYTES = 64 * 1024 * 1024
+
+# Known run-log / run-config files, parsed for tool status rather than as URL lists.
+# Matched by exact filename, the .log extension, a logs/ parent dir, or a whole-stem
+# match — NOT a loose substring, so URL files like login_urls.json, blog_endpoints.jsonl
+# or catalog.csv are never silently dropped.
+_LOG_NAMES = {"run_config.txt", "summary.md", "recon_notes.md", "providers.json",
+              "config.txt", "run_config", "recon_notes", "providers", "run_config.json"}
+_LOG_STEMS = {"run_config", "recon_notes", "providers", "run", "scan"}
+
+# Sensitive query-param names whose VALUES are redacted before a URL is persisted, so
+# tokens that recon tools (wayback/gau) capture never land in the inventory files.
+SENSITIVE_PARAMS = {"token", "access_token", "refresh_token", "id_token", "api_key",
+                    "apikey", "key", "sig", "signature", "password", "passwd", "secret",
+                    "auth", "authorization", "session", "sid", "jwt", "code",
+                    "client_secret", "private_key", "pass"}
+
+
+def is_log_or_config(path):
+    """True for run-log / run-config files (read for tool status, not URL sources)."""
+    low = os.path.basename(path).lower()
+    if low.endswith(".log"):
+        return True
+    if low in _LOG_NAMES:
+        return True
+    if os.path.basename(os.path.dirname(path)).lower() == "logs":
+        return True
+    stem = low.rsplit(".", 1)[0]
+    return stem in _LOG_STEMS
+
+
+def redact_url(url):
+    """Replace the values of sensitive query params (and any secret-shaped value) with
+    REDACTED, preserving param NAMES so dedup (which keys on names) is unaffected."""
+    try:
+        sp = urlsplit(url)
+    except ValueError:
+        return url
+    if not sp.query:
+        return url
+    changed = False
+    out = []
+    for k, v in parse_qsl(sp.query, keep_blank_values=True):
+        if v and (k.lower() in SENSITIVE_PARAMS or eng.looks_secret(v) or eng.looks_secret(f"{k}={v}")):
+            out.append((k, "REDACTED"))
+            changed = True
+        else:
+            out.append((k, v))
+    if not changed:
+        return url
+    return urlunsplit((sp.scheme, sp.netloc, sp.path, urlencode(out), sp.fragment))
 
 
 # ---- url normalization + dedup key ---------------------------------------------
@@ -109,14 +157,24 @@ def route(rec, method="GET", tech=""):
 
 
 # ---- tool status from logs/config ----------------------------------------------
+# A worse state for a tool always wins, regardless of os.walk / line order, so an
+# earlier "ok" never hides a later "failed" (a failed tool is missing evidence).
+_STATE_RANK = {"failed": 3, "missing": 2, "skipped": 2, "ok": 1}
+
+
+def _merge_status(status, tool, new):
+    if _STATE_RANK.get(new, 0) > _STATE_RANK.get(status.get(tool), 0):
+        status[tool] = new
+
+
 def scan_tool_status(recon_dir):
     status = {}
     for dp, _dn, fn in os.walk(recon_dir):
         for name in fn:
-            low = name.lower()
-            if not any(h in low for h in LOG_HINTS):
-                continue
             p = os.path.join(dp, name)
+            if not is_log_or_config(p):
+                continue
+            low = name.lower()
             try:
                 if os.path.getsize(p) > MAX_FILE_BYTES:
                     continue
@@ -131,13 +189,13 @@ def scan_tool_status(recon_dir):
                     for eng_name, meta in (data.get("engines", data) or {}).items():
                         st = meta.get("state") if isinstance(meta, dict) else None
                         if st:
-                            status[eng_name] = _norm_state(st)
+                            _merge_status(status, eng_name, _norm_state(st))
                 except (ValueError, AttributeError):
                     pass
             # generic log lines: "<tool>: not found / failed / skipped / error"
             for m in re.finditer(r"(?im)^\s*(?:\[[^\]]+\]\s*)?([a-z0-9_\-]{2,20})\s*[:=\-]\s*"
                                  r"(not found|missing|failed|error|skipped|timeout|ok|done|complete)\b", txt):
-                status.setdefault(m.group(1).lower(), _norm_state(m.group(2)))
+                _merge_status(status, m.group(1).lower(), _norm_state(m.group(2)))
     return status
 
 
@@ -255,9 +313,45 @@ def load_jsonl(path):
 
 
 def write_jsonl(path, rows):
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         for r in rows.values():
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    os.replace(tmp, path)  # atomic: resume state is never lost to a half-written file
+
+
+def _reclassify(inventory, excluded, roots, excl):
+    """Re-classify every stored row against the CURRENT scope and move it between the two
+    stores when its class changed (e.g. a host newly excluded, or newly in scope). Keeps
+    checks_done/evidence/findings/sources; resets route+test_status only on a scope change.
+    Without roots/excl (no manifest) nothing is reclassified, so rows aren't all wiped to
+    needs_clarification."""
+    if not (roots or excl):
+        return
+    for src_store in (inventory, excluded):
+        for key, r in list(src_store.items()):
+            cls = eng.classify_target(r["host"], roots, excl)
+            if cls == r["scope"]:
+                continue
+            r["scope"] = cls
+            if cls == "in_scope":
+                rec = normalize(r["url"])
+                r["route"] = route(rec, r.get("method", "GET"), r.get("tech", "")) if rec else []
+                if r["test_status"] == "excluded":
+                    r["test_status"] = "pending"
+            else:
+                r["route"], r["test_status"] = [], "excluded"
+            dest = excluded if cls == "out_of_scope" else inventory
+            if dest is src_store:
+                continue
+            del src_store[key]
+            if key not in dest:
+                dest[key] = r
+                continue
+            kept = dest[key]  # merge into the existing row at that key, preserving history
+            kept["scope"], kept["route"], kept["test_status"] = r["scope"], r["route"], r["test_status"]
+            for field in ("sources", "checks_done", "evidence", "findings"):
+                kept[field] += [x for x in r.get(field, []) if x not in kept[field]]
 
 
 def ingest(recon_dir, workspace):
@@ -276,18 +370,27 @@ def ingest(recon_dir, workspace):
 
     inventory = load_jsonl(inv_path)        # resume: preserve prior status/evidence
     excluded = load_jsonl(exc_path)
+    # If scope/exclusions changed since a prior ingest, correct stored rows first.
+    _reclassify(inventory, excluded, roots, excl)
 
     files_seen, raw_urls, added, updated = 0, 0, 0, 0
+    files_skipped = []
     counts = {"in_scope": 0, "out_of_scope": 0, "needs_clarification": 0}
 
     for dp, _dn, fn in os.walk(recon_dir):
         for name in fn:
             path = os.path.join(dp, name)
-            low = name.lower()
-            if any(h in low for h in LOG_HINTS) and not low.endswith((".txt", ".lst")):
-                continue  # logs/config handled by scan_tool_status
-            files_seen += 1
             src = os.path.relpath(path, recon_dir)
+            if is_log_or_config(path):
+                continue  # run-log/config: parsed by scan_tool_status, not a URL source
+            try:
+                if os.path.getsize(path) > MAX_FILE_BYTES:
+                    files_skipped.append({"path": src, "reason": "exceeds_max_file_bytes"})
+                    continue
+            except OSError:
+                files_skipped.append({"path": src, "reason": "stat_error"})
+                continue
+            files_seen += 1
             for url, method, status, tech in _iter_urls_from_file(path):
                 rec = normalize(url)
                 if rec is None:
@@ -310,7 +413,7 @@ def ingest(recon_dir, workspace):
                 else:
                     r = {
                         "key": key,
-                        "url": url.split("#", 1)[0],
+                        "url": redact_url(url.split("#", 1)[0]),
                         "method": method.upper(),
                         "host": rec["host"],
                         "path": rec["path"],
@@ -342,6 +445,7 @@ def ingest(recon_dir, workspace):
         "workspace": workspace,
         "note": manifest_note,
         "files_scanned": files_seen,
+        "files_skipped": files_skipped,
         "raw_urls_seen": raw_urls,
         "distinct_added": added,
         "distinct_updated": updated,

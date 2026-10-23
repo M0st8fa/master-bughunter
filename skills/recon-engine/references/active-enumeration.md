@@ -21,9 +21,10 @@ script is the muscle (enumeration).
 | Condition | Action |
 |---|---|
 | Shell available + `recon.sh` present + toolchain installed | **Run `recon.sh` directly** on the in-scope roots; hand the output dir to `ingest_recon.py`. |
-| Shell available + `recon.sh` present + toolchain missing | Run `scripts/setup.sh` (Ubuntu, sudo) to install, then run `recon.sh`. If setup can't run, report "toolchain missing" + the exact command. |
+| Shell available + `recon.sh` present + toolchain missing, **on a trusted user-owned Ubuntu host** | Run `scripts/setup.sh` (Ubuntu, sudo) to install, then run `recon.sh`. |
+| Shell available + toolchain missing, **but not a trusted user-owned host** (any locked-down/shared/sandbox environment) | Do **not** run `setup.sh` (it needs sudo and writes system-wide). Report "toolchain missing" + the exact `setup.sh`/`recon.sh` commands for the user to run on their own machine. |
 | Shell available + `recon.sh` not found | Report "recon.sh not found at `<path>`"; locate it (`$PATH`, repo `scripts/`, `/root/recon.sh`) before constructing any command. |
-| No shell / locked-down sandbox | Report "no local terminal"; use `recon.py` for passive breadth and prepare the `recon.sh` command for the user's machine. |
+| No shell / locked-down sandbox | Report "no local terminal"; use `recon.py` for passive breadth and prepare the `recon.sh` command for the user's machine. Never run `setup.sh` here. |
 | A recon job is already running / output exists | Do **not** launch a duplicate; `--resume` or ingest the existing directory. |
 
 Inspect the actual script's `usage()` before building a command — never invent flags.

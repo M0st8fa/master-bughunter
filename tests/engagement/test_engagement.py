@@ -33,10 +33,10 @@ def new_ws():
     return tempfile.mkdtemp(prefix="eng_test_")
 
 
-def make_engagement(ws, program="hackerone:acme"):
+def make_engagement(ws, program="hackerone:acme", roots=None):
     m = eng.build_manifest(
         program, "https://hackerone.com/acme",
-        roots=["*.acme.com", "acme.io", "*.acme.io"],
+        roots=roots or ["*.acme.com", "acme.io", "*.acme.io"],
         exclusions=["blog.acme.com", "*.vendor.com"],
         rate_limit=5, restrictions=["no automated scanning"],
     )
@@ -44,17 +44,39 @@ def make_engagement(ws, program="hackerone:acme"):
     return m
 
 
+def _run(ws, *args):
+    """Run the engagement.py CLI, capturing stdout JSON and the exit code."""
+    from io import StringIO
+    buf, old = StringIO(), sys.stdout
+    sys.stdout = buf
+    try:
+        rc = eng.main(["engagement.py", "--workspace", ws, *args])
+    except SystemExit as e:        # argparse choices errors exit(2)
+        return (e.code or 0), ""
+    finally:
+        sys.stdout = old
+    out = buf.getvalue()
+    try:
+        return rc, json.loads(out)
+    except ValueError:
+        return rc, out
+
+
 # 1 — authorization/scope established once, reused on resume
 def t_established_once():
     ws = new_ws()
     try:
-        make_engagement(ws)
-        m1 = eng.load(ws)
-        check("1-established-once", m1["authorization"]["established"] is True)
-        # a second init-equivalent load returns the SAME manifest (no new gate)
-        m2 = eng.load(ws)
-        check("1-reused-on-resume", m2["engagement_id"] == m1["engagement_id"]
-              and m2["authorization"]["established_at"] == m1["authorization"]["established_at"])
+        # exercise the REAL init command path, not just build_manifest/save
+        rc1, out1 = _run(ws, "init", "--program", "hackerone:acme",
+                         "--roots", "*.acme.com", "--exclude", "blog.acme.com")
+        check("1-established-once", rc1 == 0 and out1.get("status") == "created"
+              and eng.load(ws)["authorization"]["established"] is True)
+        # a second init for the same program REUSES the manifest (no new gate)
+        rc2, out2 = _run(ws, "init", "--program", "hackerone:acme")
+        check("1-reused-on-resume", rc2 == 0 and out2.get("status") == "reused")
+        # a DIFFERENT program in the same workspace is a conflict (exit 1)
+        rc3, _ = _run(ws, "init", "--program", "intigriti:globex")
+        check("1-different-program-conflict", rc3 == 1)
     finally:
         shutil.rmtree(ws, ignore_errors=True)
 
@@ -85,11 +107,11 @@ def t_new_engagement_separate():
     ws_a, ws_b = new_ws(), new_ws()
     try:
         make_engagement(ws_a, "hackerone:acme")
-        make_engagement(ws_b, "intigriti:globex")
+        make_engagement(ws_b, "intigriti:globex", roots=["*.globex.com"])
         a, b = eng.load(ws_a), eng.load(ws_b)
         check("3-separate-scope-context",
-              a["engagement_id"] != b["engagement_id"]
-              and a["scope"]["in_scope_roots"] != b["scope"]["in_scope_roots"] or True)
+              (a["engagement_id"] != b["engagement_id"])
+              and (a["scope"]["in_scope_roots"] != b["scope"]["in_scope_roots"]))
         # acme scope must NOT authorize a globex host
         cls = eng.classify_target("app.globex.com", a["scope"]["in_scope_roots"], a["scope"]["exclusions"])
         check("3-no-cross-program-auth", cls == "needs_clarification", cls)
@@ -269,9 +291,78 @@ def t_no_secrets_in_state():
         except eng.SecretInState:
             caught = True
         check("12-secret-refused-in-fields", caught)
-        # a plain researcher tag / placeholder is NOT a secret
+        # a shape-less value under a SENSITIVE KEY is refused (key-aware guard)
+        key_caught = False
+        try:
+            eng.redact_guard({"required_headers": {"Authorization": "9f8e7d6c5b4a39281706"}})
+        except eng.SecretInState:
+            key_caught = True
+        check("12-secret-refused-under-sensitive-key", key_caught)
+        # a placeholder word INSIDE a real secret no longer exempts the whole value
+        check("12-placeholder-inside-secret-not-exempt",
+              eng.looks_secret("Bearer eyJhbGciOiJIUzI1NiJ9.payloadpayload (see example.com)"))
+        # a plain researcher tag / whole-value placeholder is NOT a secret
         check("12-plain-tag-allowed", not eng.looks_secret("X-Intigriti: myhandle")
               and not eng.looks_secret("<your-token-here>"))
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+
+
+# 13 — a URL file whose name contains "log"/"blog"/"config" is NOT dropped
+def t_logname_files_not_dropped():
+    ws = new_ws()
+    try:
+        make_engagement(ws)
+        ing.ingest(FIXTURE, ws)
+        inv = ing.load_jsonl(os.path.join(ws, "inventory.jsonl"))
+        paths = {r["path"] for r in inv.values()}
+        # /login_flow/step2 lives in login_urls.json — the old substring filter dropped it
+        check("13-login-named-file-kept", "/login_flow/step2" in paths, str(sorted(paths))[:200])
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+
+
+# 6b — URL credentials are redacted before they are persisted
+def t_url_credentials_redacted():
+    ws = new_ws()
+    try:
+        make_engagement(ws)
+        ing.ingest(FIXTURE, ws)
+        inv = ing.load_jsonl(os.path.join(ws, "inventory.jsonl"))
+        cb = [r for r in inv.values() if r["path"] == "/cb"]
+        joined = json.dumps(inv)
+        check("6b-token-value-redacted",
+              bool(cb) and all("SECRETTOKENVALUE" not in r["url"] for r in cb)
+              and "SECRETTOKENVALUE" not in joined, "token leaked into inventory")
+        check("6b-param-name-preserved", bool(cb) and "access_token" in cb[0]["params"])
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+
+
+# 3b — stored rows are reclassified when scope/exclusions change on re-ingest
+def t_reclassify_on_scope_change():
+    ws = new_ws()
+    try:
+        make_engagement(ws)
+        ing.ingest(FIXTURE, ws)
+        inv = ing.load_jsonl(os.path.join(ws, "inventory.jsonl"))
+        app_rows = [k for k, r in inv.items() if r["host"] == "app.acme.com"]
+        check("3b-precondition-app-in-scope", bool(app_rows))
+        # now exclude app.acme.com and re-ingest
+        m = eng.load(ws)
+        m["scope"]["exclusions"].append("app.acme.com")
+        eng.save(ws, m)
+        ing.ingest(FIXTURE, ws)
+        inv2 = ing.load_jsonl(os.path.join(ws, "inventory.jsonl"))
+        exc2 = ing.load_jsonl(os.path.join(ws, "excluded_inventory.jsonl"))
+        app_still_in_inv = any(r["host"] == "app.acme.com" and r["scope"] == "in_scope"
+                               for r in inv2.values())
+        app_now_excluded = any(r["host"] == "app.acme.com" for r in exc2.values())
+        batch, _ = ing.next_batch(ws, 100)
+        check("3b-excluded-host-left-inventory", not app_still_in_inv)
+        check("3b-excluded-host-in-excluded-store", app_now_excluded)
+        check("3b-excluded-host-not-scheduled",
+              all(r["host"] != "app.acme.com" for r in batch))
     finally:
         shutil.rmtree(ws, ignore_errors=True)
 
@@ -281,7 +372,9 @@ def main():
                t_exclusions_enforced, t_recon_sh_real_flags, t_import_without_rerun,
                t_multiformat_extraction, t_dedup_preserves_variants,
                t_all_scheduled_and_tracked, t_resume_preserves_findings,
-               t_tool_failures_not_coverage, t_no_secrets_in_state]:
+               t_tool_failures_not_coverage, t_no_secrets_in_state,
+               t_logname_files_not_dropped, t_url_credentials_redacted,
+               t_reclassify_on_scope_change]:
         try:
             fn()
         except Exception as e:  # noqa: BLE001
