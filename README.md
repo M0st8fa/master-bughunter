@@ -84,11 +84,17 @@ skill documents its own needs.
 ### Optional: active recon toolchain (for `recon-engine`'s `recon.sh`)
 
 The `recon-engine` skill has two engines: a passive `recon.py` (stdlib, no tools, runs
-anywhere) and an active `recon.sh` that drives the Go bug-bounty toolchain. To use the
-**active** engine, install the toolchain **first** with the bundled setup script:
+anywhere) and an active `recon.sh` that drives the Go bug-bounty toolchain. `recon.sh` and
+`setup.sh` are **vendored from the canonical repo
+[`M0st8fa/Recon-Script`](https://github.com/M0st8fa/Recon-Script)** (tracked in
+`skills/recon-engine/scripts/recon-script.lock`). Before an active run, check they're up
+to date and install the toolchain **first**:
 
 ```sh
-bash skills/recon-engine/scripts/setup.sh
+# freshness check + update from the canonical repo (never executes the scripts)
+python3 -I skills/recon-engine/scripts/recon_sync.py status --dir <local_clone>
+python3 -I skills/recon-engine/scripts/recon_sync.py ensure --dir <local_clone>
+bash <local_clone>/setup.sh                 # install the toolchain (trusted host)
 ```
 
 > ⚠️ **Ubuntu 20.04 / 22.04 / 24.04 only**, and it needs **sudo**. It installs a large
@@ -99,19 +105,14 @@ bash skills/recon-engine/scripts/setup.sh
 > Subfinder API keys are **optional** (empty placeholders are written to
 > `~/.config/subfinder/provider-config.yaml`) — add them for broader subdomain coverage.
 
-**Notifications (optional).** `recon.sh` can push the end-of-run summary to Slack, Discord
-or Telegram, and when **Telegram** is configured it also sends a concise alert on each
-confirmed high-signal finding (zone transfer, subdomain takeover, nuclei critical/high,
-open redirect, CORS misconfig, exposed `.git`, public cloud bucket, secrets). Enable
-Telegram with `--telegram <bot_token>:<chat_id>` or by exporting `TELEGRAM_BOT_TOKEN` and
-`TELEGRAM_CHAT_ID` (env keeps the token out of shell history). The bot token is a
-credential — it is read at runtime only and never committed; secret *values* are never
-sent, only finding type/location. It's opt-in: with nothing set, notifications are silent
-no-ops.
+**Notifications (optional).** The canonical `recon.sh` can push the end-of-run summary to
+**Slack or Discord** (`--slack`/`--discord <webhook>`). Opt-in: with no webhook set, the
+notify calls are silent no-ops, and the webhook is read at runtime only, never committed.
+(Telegram/per-finding alerts aren't part of the canonical Recon-Script repo; add them
+upstream and re-sync if you want them.)
 
 ```sh
-export TELEGRAM_BOT_TOKEN='123456789:AA...'; export TELEGRAM_CHAT_ID='123456789'
-bash skills/recon-engine/scripts/recon.sh -d example.com --nuclei --active-checks
+bash <local_clone>/recon.sh -d example.com --nuclei --active-checks --slack '<webhook>'
 ```
 
 **Optional recon keys:** `recon-engine` can use VirusTotal/Shodan if keys are present via

@@ -5,6 +5,31 @@ Format: reverse-chronological. Dates are absolute (YYYY-MM-DD).
 
 ## [Unreleased]
 
+### 2026-10-23 — recon-engine: canonical Recon-Script source + pre-hunt freshness check
+- **Canonical source.** `recon.sh` and `setup.sh` are now vendored from the canonical repo
+  **`https://github.com/M0st8fa/Recon-Script`**, recorded in
+  `skills/recon-engine/scripts/recon-script.lock` (repo URL, synced commit, sha256 of each
+  script). The bundled copies were replaced with that repo's current versions (commit
+  `4e10781`); they are a mirror, not hand-edited.
+- **Pre-hunt freshness check.** New `scripts/recon_sync.py` (stdlib): `status` reports
+  `up_to_date` / `stale` / `missing` / `drifted-from-lock` / `unknown-network` by comparing
+  the local `recon.sh` against the canonical repo (git fetch, an offline `--reference`
+  file, or the lock sha); `ensure` clones or `git pull --ff-only`s the repo; `lock` prints
+  the lock. It treats the repo as **untrusted data** — clones/compares text only and
+  **never executes** `recon.sh`/`setup.sh` (that stays the explicit, trusted-host step).
+- **Wired into the workflow.** `recon-engine` SKILL.md + `references/active-enumeration.md`
+  (new "Canonical source & freshness" section + a `stale` row in the execution decision
+  table), the `engagement` skill (recon branch), and `bb-pipeline` Phase 1 now run the
+  freshness check before a fresh active run and install the toolchain from the canonical
+  `setup.sh` when tools are missing.
+- **Notifications reconciled to the canonical script.** The canonical `recon.sh` has only
+  Slack/Discord webhooks, so the Telegram/per-finding-alert docs (a prior local-only
+  addition) were removed from `SKILL.md`, `active-enumeration.md`, `README.md`, and
+  `keys.env.example` so the documented invocation matches the actual script. Telegram can
+  be re-added upstream in Recon-Script and picked up on the next sync.
+- **Tests:** `tests/recon-engine/test_recon_sync.py` (8 checks, offline, no network/git) +
+  `scenarios.md` SYNC-1..3. Validator 33/33, 0 errors.
+
 ### 2026-10-23 — Persistent authorization, autonomous hunting & recon-first workflow
 - **New `engagement` skill (orchestration-support)** — persistent engagement manifest
   (`engagement.json`, schema `schemas/engagement.schema.json`). `scripts/engagement.py`

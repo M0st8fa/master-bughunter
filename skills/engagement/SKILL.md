@@ -85,8 +85,11 @@ only itself. Out-of-scope assets are recorded separately and never enter the hun
 ## 4. Recon: fresh vs supplied (decide, don't re-run blindly)
 
 - **Fresh recon needed** → hand off to `recon-engine` (`scripts/recon.sh` is the standard
-  active engine). First check `recon.status`: if `running` or results already exist, do
-  **not** launch a duplicate scan.
+  active engine, vendored from the canonical repo `M0st8fa/Recon-Script`). **Before the
+  run, verify the engine is current:** `python3 -I <recon-engine>/scripts/recon_sync.py
+  status --dir <clone>` and, if `stale`/`missing`, `recon_sync.py ensure --dir <clone>`
+  (then `setup.sh` if the toolchain is absent). Then check `recon.status`: if `running` or
+  results already exist, do **not** launch a duplicate scan.
 - **User supplied a recon directory** → ingest it instead of running recon again:
 
 ```bash

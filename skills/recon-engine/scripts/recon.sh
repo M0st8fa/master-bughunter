@@ -10,9 +10,9 @@ set -euo pipefail
 # ─────────────────────────────────────────────
 # COLORS
 # ─────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BLUE='\033[0;34m'; MAGENTA='\033[0;35m'
-BOLD='\033[1m'; RESET='\033[0m'
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
+CYAN=$'\033[0;36m'; BLUE=$'\033[0;34m'; MAGENTA=$'\033[0;35m'
+BOLD=$'\033[1m'; RESET=$'\033[0m'
 
 # ─────────────────────────────────────────────
 # DEFAULTS
@@ -22,8 +22,8 @@ DOMAIN_LIST=""
 OUTPUT_DIR="recon_$(date +%Y%m%d_%H%M%S)"
 THREADS=50
 RATE_LIMIT=150          # httpx requests/sec
-RESOLVERS="/etc/resolv.conf"
-CUSTOM_RESOLVERS=""
+CUSTOM_RESOLVERS=""     # optional DNS resolvers file (-R), passed to dnsx
+RESOLVER_ARGS=()        # built from CUSTOM_RESOLVERS in parse_args
 DEPTH=3                 # katana crawl depth
 TIMEOUT=10
 SKIP_WAYBACK=false
@@ -32,9 +32,6 @@ SKIP_KATANA=false
 SKIP_SUBFINDER=false
 SKIP_HTTPX=false
 SKIP_ZONE_TRANSFER=false
-SKIP_SCREENSHOTS=false
-SKIP_NUCLEI=false
-SKIP_GITLEAKS=false
 RUN_NUCLEI=false
 RUN_SCREENSHOTS=false
 RUN_GITLEAKS=false
@@ -45,10 +42,6 @@ RUN_ACTIVE_CHECKS=false
 NOTIFY=false
 SLACK_WEBHOOK=""
 DISCORD_WEBHOOK=""
-# Telegram — never hardcode a token here. Values come from the --telegram flag
-# or the TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID environment variables at runtime.
-TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
-TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 VERBOSE=false
 RESUME=false
 WORDLIST="/opt/wordlists/dns/subdomains-top5000.txt"
@@ -125,15 +118,8 @@ ${BOLD}EXTRA MODULES (opt-in):${RESET}
   --resume              Resume from existing output directory
 
 ${BOLD}NOTIFICATIONS:${RESET}
-  --slack    <webhook>          Send summary to Slack
-  --discord  <webhook>          Send summary to Discord
-  --telegram <bot_token>:<chat_id>
-                                Send run summary AND per-finding alerts to Telegram.
-                                A bot token itself contains a ':', so the value is split
-                                on its LAST colon (everything after = chat_id).
-                                You can instead export TELEGRAM_BOT_TOKEN and
-                                TELEGRAM_CHAT_ID (keeps the token out of shell history);
-                                the --telegram flag overrides the env vars when given.
+  --slack   <webhook>   Send summary to Slack
+  --discord <webhook>   Send summary to Discord
 
 ${BOLD}EXAMPLES:${RESET}
   $0 -d example.com
@@ -141,7 +127,6 @@ ${BOLD}EXAMPLES:${RESET}
   $0 -d example.com --skip-wayback --skip-gospider --nuclei
   $0 -d example.com --resume -o recon_20240601_120000
   $0 -d example.com --test-redirects --active-checks --params --ports
-  TELEGRAM_BOT_TOKEN=123:AA.. TELEGRAM_CHAT_ID=99 $0 -d example.com --nuclei --active-checks
 
 EOF
     exit 0
@@ -150,14 +135,61 @@ EOF
 # ─────────────────────────────────────────────
 # LOGGING
 # ─────────────────────────────────────────────
-log()     { echo -e "${GREEN}[+]${RESET} $*"; }
-warn()    { echo -e "${YELLOW}[!]${RESET} $*"; }
-err()     { echo -e "${RED}[-]${RESET} $*" >&2; }
-info()    { echo -e "${CYAN}[*]${RESET} $*"; }
+# Consolidated run log, capped at 1 MB. Every log line is mirrored here
+# (ANSI stripped) so a run leaves one readable recon.log, while the cap keeps
+# the file from growing without bound on long crawls. Rotation is in-place:
+# once the file passes 1 MB we keep only its most recent 1 MB, so recon.log
+# never exceeds the cap and no .1/.2 copies accumulate.
+MAX_LOG_BYTES=1048576      # 1 MB
+_log_sink() {
+    [[ -d "$OUTPUT_DIR" ]] || return 0          # output dir not created yet
+    local f="$OUTPUT_DIR/recon.log"
+    printf '%s %s\n' "$(date +%H:%M:%S)" "$1" \
+        | sed -r 's/\x1b\[[0-9;]*m//g' >> "$f" 2>/dev/null || return 0
+    local sz; sz=$(wc -c < "$f" 2>/dev/null || echo 0)
+    if (( sz > MAX_LOG_BYTES )); then
+        tail -c "$MAX_LOG_BYTES" "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f" 2>/dev/null
+    fi
+}
+
+log()     { echo -e "${GREEN}[+]${RESET} $*"; _log_sink "[+] $*"; }
+warn()    { echo -e "${YELLOW}[!]${RESET} $*"; _log_sink "[!] $*"; }
+err()     { echo -e "${RED}[-]${RESET} $*" >&2; _log_sink "[-] $*"; }
+info()    { echo -e "${CYAN}[*]${RESET} $*"; _log_sink "[*] $*"; }
 section() { echo -e "\n${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"; \
             echo -e "${BOLD}${BLUE}  $*${RESET}"; \
-            echo -e "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"; }
-verbose() { [[ "$VERBOSE" == true ]] && echo -e "${MAGENTA}[v]${RESET} $*" || true; }
+            echo -e "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"; \
+            _log_sink "=== $* ==="; }
+verbose() { [[ "$VERBOSE" == true ]] && { echo -e "${MAGENTA}[v]${RESET} $*"; _log_sink "[v] $*"; } || true; }
+
+# Streaming 1 MB capper for a per-tool log file. Route a tool's output through
+# it with:  2> >(_logcap "$OUTPUT_DIR/logs/<tool>.log")  so the file on disk
+# never exceeds MAX_LOG_BYTES at any instant — only the most recent 1 MB of the
+# stream is kept (in a byte-bounded in-memory ring); older output is discarded,
+# never written. flush() every 200 lines only bounds disk-write churn; memory
+# is trimmed on every line, so the file stays <= 1 MB at all times.
+_logcap() {
+    awk -v cap="$MAX_LOG_BYTES" -v out="$1" '
+        function flush(   i) {
+            printf "" > out                 # truncate (reopened after close)
+            for (i = lo; i <= hi; i++) print buf[i] > out
+            close(out)
+        }
+        BEGIN { lo = 1; hi = 0; bytes = 0; since = 0 }
+        {
+            buf[++hi] = $0; bytes += length($0) + 1
+            while (bytes > cap && lo < hi) { bytes -= length(buf[lo]) + 1; delete buf[lo]; lo++ }
+            if (++since >= 200) { flush(); since = 0 }   # bound disk-write churn
+        }
+        END { flush() }
+    '
+}
+
+# Line count that never leaks a shell error. `wc -l < missing_file` makes the
+# shell print "No such file or directory" (the input redirection fails before
+# 2>/dev/null can apply), which spams report generation for every optional
+# module that wasn't run. Guard on existence first, so absent files report 0.
+count_lines() { if [[ -f "$1" ]]; then wc -l < "$1" 2>/dev/null; else echo 0; fi; }
 
 # Resolve the DNS wordlist path across known install locations.
 # Prevents silent brute-force skip when recon.sh's default doesn't match
@@ -238,25 +270,37 @@ setup_dirs() {
 # ─────────────────────────────────────────────
 prepare_domains() {
     local alldomains="$OUTPUT_DIR/alldomains.txt"
+    local roots="$OUTPUT_DIR/root_domains.txt"
 
+    # Build the ORIGINAL scope (root domains) first. This is the source of
+    # truth used later to filter out-of-scope URLs (facebook.com, youtube.com,
+    # cdn providers, etc.) that crawlers pick up from external links. It is
+    # rebuilt from -d/-l every run so the scope always matches the arguments.
     if [[ -n "$DOMAIN" ]]; then
-        echo "$DOMAIN" > "$alldomains"
-        log "Target: $DOMAIN"
+        echo "$DOMAIN" > "$roots"
     elif [[ -n "$DOMAIN_LIST" ]]; then
-        cp "$DOMAIN_LIST" "$alldomains"
-        log "Loaded $(wc -l < "$alldomains") domains from $DOMAIN_LIST"
+        cp "$DOMAIN_LIST" "$roots"
     fi
 
-    # Sanitize: strip whitespace, remove blank lines, lowercase
-    sed -i 's/^[[:space:]]*//;s/[[:space:]]*$//;/^$/d' "$alldomains"
-    tr '[:upper:]' '[:lower:]' < "$alldomains" | sort -u > "${alldomains}.tmp"
-    mv "${alldomains}.tmp" "$alldomains"
+    # Sanitize: strip whitespace, remove blank lines, lowercase, dedupe
+    sed -i 's/^[[:space:]]*//;s/[[:space:]]*$//;/^$/d' "$roots"
+    tr '[:upper:]' '[:lower:]' < "$roots" | sort -u > "${roots}.tmp"
+    mv "${roots}.tmp" "$roots"
 
-    # Preserve the ORIGINAL scope (before subdomain enumeration appends
-    # discovered subs into alldomains.txt). This is the source of truth
-    # used later to filter out-of-scope URLs (facebook.com, youtube.com,
-    # cdn providers, etc.) that crawlers pick up from external links.
-    cp "$alldomains" "$OUTPUT_DIR/root_domains.txt"
+    # Working set. Subdomain enumeration appends discovered subs into
+    # alldomains.txt, so on --resume keep the accumulated list instead of
+    # resetting it back to the root scope.
+    if [[ "$RESUME" == true && -s "$alldomains" ]]; then
+        log "Resume: keeping existing $alldomains ($(wc -l < "$alldomains") entries)"
+    else
+        cp "$roots" "$alldomains"
+    fi
+
+    if [[ -n "$DOMAIN" ]]; then
+        log "Target: $DOMAIN"
+    else
+        log "Loaded $(wc -l < "$roots") domains from $DOMAIN_LIST"
+    fi
 }
 
 # Keep only URLs whose host is one of the root domains or a subdomain of one.
@@ -301,6 +345,11 @@ zone_transfer_check() {
     [[ "$SKIP_ZONE_TRANSFER" == true ]] && return
     section "DNS Zone Transfer Check"
 
+    if [[ "$RESUME" == true && -s "$OUTPUT_DIR/dns/nameservers.txt" ]]; then
+        log "Resume: dns/nameservers.txt exists — skipping zone transfer / DNS recon"
+        return
+    fi
+
     local alldomains="$OUTPUT_DIR/alldomains.txt"
     local zt_out="$OUTPUT_DIR/dns/zone_transfers.txt"
     local ns_out="$OUTPUT_DIR/dns/nameservers.txt"
@@ -339,7 +388,6 @@ zone_transfer_check() {
                     echo ""
                 } >> "$zt_out"
                 found=$((found+1))
-                telegram_finding "Zone transfer VULNERABLE" "$domain via $ns"
                 # Extract subdomains from zone transfer
                 echo "$result" | grep -oP "[\w.-]+\.$domain" | sort -u \
                     >> "$OUTPUT_DIR/subdomains/zone_transfer_subs.txt" 2>/dev/null || true
@@ -395,6 +443,11 @@ subdomain_enum() {
     [[ "$SKIP_SUBFINDER" == true ]] && return
     section "Subdomain Enumeration"
 
+    if [[ "$RESUME" == true && -s "$OUTPUT_DIR/subdomains/all_subdomains.txt" ]]; then
+        log "Resume: subdomains/all_subdomains.txt exists — skipping subdomain enumeration"
+        return
+    fi
+
     local alldomains="$OUTPUT_DIR/alldomains.txt"
     local subfinder_out="$OUTPUT_DIR/subdomains/subfinder.txt"
     local dnsx_out="$OUTPUT_DIR/subdomains/dnsx_resolved.txt"
@@ -403,8 +456,8 @@ subdomain_enum() {
     info "Running subfinder (passive + all sources)..."
     subfinder -dL "$alldomains" -all --recursive \
         -o "$subfinder_out" \
-        -silent 2>>"$OUTPUT_DIR/logs/subfinder.log" || true
-    log "Subfinder: $(wc -l < "$subfinder_out" 2>/dev/null || echo 0) subdomains"
+        -silent 2> >(_logcap "$OUTPUT_DIR/logs/subfinder.log") || true
+    log "Subfinder: $(count_lines "$subfinder_out") subdomains"
 
     # Optional DNS brute force if wordlist exists
     if resolve_wordlist && command -v dnsx &>/dev/null; then
@@ -413,10 +466,10 @@ subdomain_enum() {
         # Generate permutations per domain
         while IFS= read -r domain; do
             awk -v d="$domain" '{print $1"."d}' "$WORDLIST" \
-            | dnsx -silent -a -resp -threads "$THREADS" \
+            | dnsx -silent -a -resp -threads "$THREADS" "${RESOLVER_ARGS[@]}" \
             >> "$brute_out" 2>/dev/null || true
         done < "$alldomains"
-        log "Brute force: $(wc -l < "$brute_out" 2>/dev/null || echo 0) results"
+        log "Brute force: $(count_lines "$brute_out") results"
     else
         warn "No DNS wordlist found in any known location — skipping brute-force (see WORDLIST_FALLBACKS or pass -w)"
     fi
@@ -428,19 +481,19 @@ subdomain_enum() {
     # Resolve with dnsx if available
     if command -v dnsx &>/dev/null; then
         info "Resolving subdomains with dnsx..."
-        dnsx -silent -l "$merged" -a -resp -threads "$THREADS" \
-            -o "$dnsx_out" 2>>"$OUTPUT_DIR/logs/dnsx.log" || true
+        dnsx -silent -l "$merged" -a -resp -threads "$THREADS" "${RESOLVER_ARGS[@]}" \
+            -o "$dnsx_out" 2> >(_logcap "$OUTPUT_DIR/logs/dnsx.log") || true
 
         # Wildcard detection
-        dnsx -silent -l "$merged" -wc 2>/dev/null \
+        dnsx -silent -l "$merged" -wc "${RESOLVER_ARGS[@]}" 2>/dev/null \
             | tee "$OUTPUT_DIR/dns/wildcards.txt" || true
 
         # CNAME map across the full discovered scope — helps spot
         # subdomain takeover candidates pointing at unclaimed cloud resources
         info "Mapping CNAME records across full scope..."
-        dnsx -silent -l "$merged" -cname -resp-only -threads "$THREADS" \
-            -o "$OUTPUT_DIR/subdomains/cname_map.txt" 2>>"$OUTPUT_DIR/logs/dnsx.log" || true
-        local cname_cnt; cname_cnt=$(wc -l < "$OUTPUT_DIR/subdomains/cname_map.txt" 2>/dev/null || echo 0)
+        dnsx -silent -l "$merged" -cname -resp-only -threads "$THREADS" "${RESOLVER_ARGS[@]}" \
+            -o "$OUTPUT_DIR/subdomains/cname_map.txt" 2> >(_logcap "$OUTPUT_DIR/logs/dnsx.log") || true
+        local cname_cnt; cname_cnt=$(count_lines "$OUTPUT_DIR/subdomains/cname_map.txt")
         [[ $cname_cnt -gt 0 ]] && log "CNAME records mapped: $cname_cnt"
     fi
 
@@ -462,14 +515,6 @@ subdomain_enum() {
         info "Checking subdomain takeover with subzy..."
         subzy run --targets "$merged" --timeout "$TIMEOUT" \
             --output "$OUTPUT_DIR/vuln/subdomain_takeover.txt" 2>/dev/null || true
-        # Alert only on CONFIRMED takeovers (handles both subzy JSON and text output;
-        # must not match "vulnerable": false).
-        local to_file="$OUTPUT_DIR/vuln/subdomain_takeover.txt" to_hits
-        to_hits=$(grep -ciE '"vulnerable"[[:space:]]*:[[:space:]]*true|\[[[:space:]]*VULNERABLE' "$to_file" 2>/dev/null || echo 0)
-        if [[ "$to_hits" -gt 0 ]]; then
-            telegram_finding "Subdomain takeover ($to_hits)" \
-                "$(grep -iE '"vulnerable"[[:space:]]*:[[:space:]]*true|\[[[:space:]]*VULNERABLE' "$to_file" 2>/dev/null | head -5)"
-        fi
     fi
 }
 
@@ -478,6 +523,11 @@ subdomain_enum() {
 # ─────────────────────────────────────────────
 collect_urls() {
     section "URL Collection"
+
+    if [[ "$RESUME" == true && -s "$OUTPUT_DIR/urls/allurls.txt" ]]; then
+        log "Resume: urls/allurls.txt exists — skipping URL collection"
+        return
+    fi
 
     local alldomains="$OUTPUT_DIR/alldomains.txt"
     local allurls="$OUTPUT_DIR/urls/allurls.txt"
@@ -488,9 +538,9 @@ collect_urls() {
     # Waybackurls
     if [[ "$SKIP_WAYBACK" == false ]]; then
         info "Fetching Wayback Machine URLs..."
-        cat "$alldomains" | waybackurls 2>>"$OUTPUT_DIR/logs/wayback.log" \
+        cat "$alldomains" | waybackurls 2> >(_logcap "$OUTPUT_DIR/logs/wayback.log") \
             > "$OUTPUT_DIR/urls/waybackurls.txt" || true
-        log "Wayback: $(wc -l < "$OUTPUT_DIR/urls/waybackurls.txt" 2>/dev/null || echo 0) URLs"
+        log "Wayback: $(count_lines "$OUTPUT_DIR/urls/waybackurls.txt") URLs"
         cat "$OUTPUT_DIR/urls/waybackurls.txt" >> "$tmp_urls"
 
         # Also try Common Crawl via gau if available
@@ -499,7 +549,7 @@ collect_urls() {
             cat "$alldomains" | gau --threads "$THREADS" \
                 >> "$OUTPUT_DIR/urls/gau.txt" 2>/dev/null || true
             cat "$OUTPUT_DIR/urls/gau.txt" >> "$tmp_urls" 2>/dev/null || true
-            log "gau: $(wc -l < "$OUTPUT_DIR/urls/gau.txt" 2>/dev/null || echo 0) URLs"
+            log "gau: $(count_lines "$OUTPUT_DIR/urls/gau.txt") URLs"
         fi
     fi
 
@@ -510,11 +560,12 @@ collect_urls() {
             -d "$DEPTH" \
             -jc \
             -kf all \
+            -fsu \
             -silent \
             -c "$THREADS" \
             -o "$OUTPUT_DIR/urls/katana.txt" \
-            2>>"$OUTPUT_DIR/logs/katana.log" || true
-        log "Katana: $(wc -l < "$OUTPUT_DIR/urls/katana.txt" 2>/dev/null || echo 0) URLs"
+            2> >(_logcap "$OUTPUT_DIR/logs/katana.log") || true
+        log "Katana: $(count_lines "$OUTPUT_DIR/urls/katana.txt") URLs"
         cat "$OUTPUT_DIR/urls/katana.txt" >> "$tmp_urls" 2>/dev/null || true
     fi
 
@@ -524,21 +575,26 @@ collect_urls() {
         sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s|^|https://|' "$alldomains" \
         | gospider -S - -t "$THREADS" --depth "$DEPTH" \
             --user-agent "$USER_AGENT" \
-            2>>"$OUTPUT_DIR/logs/gospider.log" \
+            2> >(_logcap "$OUTPUT_DIR/logs/gospider.log") \
         | sed -n 's/.*\(https:\/\/[^ ]*\).*/\1/p' \
         >> "$OUTPUT_DIR/urls/gospider.txt" 2>/dev/null || true
-        log "GoSpider: $(wc -l < "$OUTPUT_DIR/urls/gospider.txt" 2>/dev/null || echo 0) URLs"
+        log "GoSpider: $(count_lines "$OUTPUT_DIR/urls/gospider.txt") URLs"
         cat "$OUTPUT_DIR/urls/gospider.txt" >> "$tmp_urls" 2>/dev/null || true
     fi
 
     # Merge & deduplicate — filter static assets
     info "Merging and deduplicating URLs..."
+    # The grep -v filters exit 1 when every line is filtered out (e.g. no URLs
+    # collected at all, or all crawlers skipped); with pipefail that would abort
+    # the whole run under set -e, so tolerate an empty/all-filtered pipeline.
     sort -u "$tmp_urls" \
         | grep -vE '\.(css|jpg|jpeg|png|gif|svg|ico|woff|woff2|ttf|eot|otf|map)($|\?)' \
         | grep -vE '^$' \
-        | anew "$OUTPUT_DIR/urls/.allurls_raw.txt" > /dev/null
+        | anew "$OUTPUT_DIR/urls/.allurls_raw.txt" > /dev/null || true
+    # Ensure the raw file always exists for the steps that read it next.
+    touch "$OUTPUT_DIR/urls/.allurls_raw.txt"
 
-    log "Total unique URLs (before scope filter): $(wc -l < "$OUTPUT_DIR/urls/.allurls_raw.txt" 2>/dev/null || echo 0)"
+    log "Total unique URLs (before scope filter): $(count_lines "$OUTPUT_DIR/urls/.allurls_raw.txt")"
 
     # Drop out-of-scope URLs (facebook.com, youtube.com, cdn hosts, etc.)
     # picked up from links embedded in crawled pages.
@@ -546,8 +602,8 @@ collect_urls() {
     filter_in_scope "$OUTPUT_DIR/urls/.allurls_raw.txt" "$allurls"
 
     local raw_count in_scope_count
-    raw_count=$(wc -l < "$OUTPUT_DIR/urls/.allurls_raw.txt" 2>/dev/null || echo 0)
-    in_scope_count=$(wc -l < "$allurls" 2>/dev/null || echo 0)
+    raw_count=$(count_lines "$OUTPUT_DIR/urls/.allurls_raw.txt")
+    in_scope_count=$(count_lines "$allurls")
     log "Total unique URLs: ${BOLD}$in_scope_count${RESET} (dropped $((raw_count - in_scope_count)) out-of-scope)"
 
     # Extract unique subdomains from URLs (in-scope only, since allurls is now filtered)
@@ -561,6 +617,11 @@ collect_urls() {
 http_probe() {
     [[ "$SKIP_HTTPX" == true ]] && return
     section "HTTP Probing"
+
+    if [[ "$RESUME" == true && -s "$OUTPUT_DIR/httpx/httpx_all.txt" ]]; then
+        log "Resume: httpx/httpx_all.txt exists — skipping HTTP probing"
+        return
+    fi
 
     local allurls="$OUTPUT_DIR/urls/allurls.txt"
     local httpx_json="$OUTPUT_DIR/httpx/httpx_all.json"
@@ -579,10 +640,10 @@ http_probe() {
         -timeout "$TIMEOUT" \
         -silent \
         -o "$httpx_json" \
-        2>>"$OUTPUT_DIR/logs/httpx.log" || true
+        2> >(_logcap "$OUTPUT_DIR/logs/httpx.log") || true
 
     local total
-    total=$(wc -l < "$httpx_json" 2>/dev/null || echo 0)
+    total=$(count_lines "$httpx_json")
     log "httpx probed: $total responses"
 
     if [[ ! -s "$httpx_json" ]]; then
@@ -608,7 +669,7 @@ http_probe() {
     for code in "${codes[@]}"; do
         jq -r --argjson c "$code" 'select(.status_code == $c) | .url' "$httpx_json" \
             > "$OUTPUT_DIR/httpx/httpx${code}.txt" 2>/dev/null || true
-        local cnt; cnt=$(wc -l < "$OUTPUT_DIR/httpx/httpx${code}.txt" 2>/dev/null || echo 0)
+        local cnt; cnt=$(count_lines "$OUTPUT_DIR/httpx/httpx${code}.txt")
         [[ $cnt -gt 0 ]] && log "  [$code]: $cnt URLs"
     done
 
@@ -621,6 +682,13 @@ http_probe() {
     jq -r '(.tech // .technologies // [])[]?' "$httpx_json" 2>/dev/null \
         | sort | uniq -c | sort -rn \
         > "$OUTPUT_DIR/httpx/tech_summary.txt" 2>/dev/null || true
+
+    # Web server (Server header) frequency summary — quick fingerprint of the
+    # stack across all live hosts. Built from httpx's existing JSON, so the
+    # httpx invocation and httpx_all.txt layout are unchanged.
+    jq -r '.webserver // empty' "$httpx_json" 2>/dev/null \
+        | sed '/^$/d' | sort | uniq -c | sort -rn \
+        > "$OUTPUT_DIR/httpx/server_summary.txt" 2>/dev/null || true
 
     # WordPress detection
     grep -aEoi 'https?://[^/]+/(wp-content|wp-includes|wp-admin)/?.*' \
@@ -675,7 +743,7 @@ classify_urls() {
         grep -aiEo "https?://[^ ]+" "$allurls" 2>/dev/null \
             | grep -aiE "${patterns[$name]}" \
             > "$u/${name}.txt" 2>/dev/null || true
-        local cnt; cnt=$(wc -l < "$u/${name}.txt" 2>/dev/null || echo 0)
+        local cnt; cnt=$(count_lines "$u/${name}.txt")
         [[ $cnt -gt 0 ]] && log "  $name: $cnt"
     done
 
@@ -699,7 +767,7 @@ run_nuclei() {
     info "Updating nuclei templates..."
     nuclei -update-templates -silent 2>/dev/null || true
 
-    info "Running nuclei on $(wc -l < "$httpx200" 2>/dev/null || echo 0) live URLs..."
+    info "Running nuclei on $(count_lines "$httpx200") live URLs..."
     nuclei -l "$httpx200" \
         -t "$NUCLEI_TEMPLATES" \
         -severity critical,high,medium \
@@ -708,18 +776,13 @@ run_nuclei() {
         -timeout "$TIMEOUT" \
         -silent \
         -o "$nuclei_out" \
-        2>>"$OUTPUT_DIR/logs/nuclei.log" || true
+        2> >(_logcap "$OUTPUT_DIR/logs/nuclei.log") || true
 
     # Separate critical/high
     grep -iE "critical|high" "$nuclei_out" > "$nuclei_critical" 2>/dev/null || true
 
-    log "Nuclei findings: $(wc -l < "$nuclei_out" 2>/dev/null || echo 0)"
-    log "Critical/High: $(wc -l < "$nuclei_critical" 2>/dev/null || echo 0)"
-
-    local ch_cnt; ch_cnt=$(wc -l < "$nuclei_critical" 2>/dev/null || echo 0)
-    if [[ "$ch_cnt" -gt 0 ]]; then
-        telegram_finding "Nuclei critical/high ($ch_cnt)" "$(head -5 "$nuclei_critical" 2>/dev/null)"
-    fi
+    log "Nuclei findings: $(count_lines "$nuclei_out")"
+    log "Critical/High: $(count_lines "$nuclei_critical")"
 
     # Run specific checks
     # CVE checks only
@@ -749,14 +812,14 @@ run_screenshots() {
         gowitness file -f "$httpx200" \
             --screenshot-path "$OUTPUT_DIR/screenshots/" \
             --threads "$THREADS" \
-            2>>"$OUTPUT_DIR/logs/gowitness.log" || true
+            2> >(_logcap "$OUTPUT_DIR/logs/gowitness.log") || true
         log "Screenshots saved to $OUTPUT_DIR/screenshots/"
     elif command -v aquatone &>/dev/null; then
         info "Taking screenshots with aquatone..."
         cat "$httpx200" | aquatone \
             -out "$OUTPUT_DIR/screenshots/" \
             -threads "$THREADS" \
-            2>>"$OUTPUT_DIR/logs/aquatone.log" || true
+            2> >(_logcap "$OUTPUT_DIR/logs/aquatone.log") || true
     else
         warn "Neither gowitness nor aquatone installed"
     fi
@@ -787,23 +850,13 @@ run_gitleaks() {
     gitleaks detect --source "$download_dir" \
         --report-format json \
         --report-path "$secrets_dir/gitleaks_report.json" \
-        --no-git 2>>"$OUTPUT_DIR/logs/gitleaks.log" || true
+        --no-git 2> >(_logcap "$OUTPUT_DIR/logs/gitleaks.log") || true
 
     # Also grep for common secrets inline
     grep -rEio "(api_key|apikey|api-key|secret|password|passwd|token|access_key|private_key|bearer|auth_token)\s*[=:]\s*['\"]?[A-Za-z0-9_/+=-]{20,}" \
         "$download_dir/" > "$secrets_dir/grep_secrets.txt" 2>/dev/null || true
 
     log "Secrets scan done. Check: $secrets_dir/"
-
-    # Alert on counts + location only — never send the secret values to Telegram.
-    local gl_cnt=0 sec_cnt=0
-    [[ -s "$secrets_dir/gitleaks_report.json" ]] && \
-        gl_cnt=$(grep -c '"RuleID"' "$secrets_dir/gitleaks_report.json" 2>/dev/null || echo 0)
-    [[ -s "$secrets_dir/grep_secrets.txt" ]] && \
-        sec_cnt=$(wc -l < "$secrets_dir/grep_secrets.txt" 2>/dev/null || echo 0)
-    if [[ "$gl_cnt" -gt 0 || "$sec_cnt" -gt 0 ]]; then
-        telegram_finding "Secrets found" "gitleaks hits: $gl_cnt, inline matches: $sec_cnt (see $secrets_dir/ — values not sent)"
-    fi
 }
 
 # ─────────────────────────────────────────────
@@ -834,10 +887,7 @@ cloud_storage_check() {
             code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time "$TIMEOUT" "$url" 2>/dev/null || echo "000")
             if [[ "$code" == "200" || "$code" == "403" ]]; then
                 echo "[$code] $url" >> "$OUTPUT_DIR/dns/cloud_storage_results.txt"
-                if [[ "$code" == "200" ]]; then
-                    warn "PUBLIC bucket: $url"
-                    telegram_finding "Public cloud bucket" "$url"
-                fi
+                [[ "$code" == "200" ]] && warn "PUBLIC bucket: $url"
             fi
         done < "$OUTPUT_DIR/dns/cloud_storage_urls.txt"
     fi
@@ -862,7 +912,7 @@ guess_parameters() {
         info "Guessing parameters: $domain"
         local outfile="$params_dir/${domain}.txt"
         timeout 180 arjun -u "https://$domain/" -t 20 -oT "$outfile" --stable \
-            >> "$OUTPUT_DIR/logs/arjun.log" 2>&1 || true
+            > >(_logcap "$OUTPUT_DIR/logs/arjun.log") 2>&1 || true
         if [[ -s "$outfile" ]]; then
             local cnt; cnt=$(wc -l < "$outfile")
             log "  $domain: $cnt parameter(s) found"
@@ -870,7 +920,7 @@ guess_parameters() {
     done < "$roots"
 
     cat "$params_dir"/*.txt 2>/dev/null | sort -u > "$params_dir/all_params.txt" || true
-    local total; total=$(wc -l < "$params_dir/all_params.txt" 2>/dev/null || echo 0)
+    local total; total=$(count_lines "$params_dir/all_params.txt")
     log "Parameter guessing done: $total unique parameter(s) → $params_dir/"
 }
 
@@ -893,9 +943,9 @@ port_scan() {
         -c "$THREADS" \
         -silent \
         -o "$ports_dir/open_ports.txt" \
-        2>>"$OUTPUT_DIR/logs/naabu.log" || true
+        2> >(_logcap "$OUTPUT_DIR/logs/naabu.log") || true
 
-    local cnt; cnt=$(wc -l < "$ports_dir/open_ports.txt" 2>/dev/null || echo 0)
+    local cnt; cnt=$(count_lines "$ports_dir/open_ports.txt")
     log "Open ports found: $cnt"
 
     # Group per host for readability
@@ -961,11 +1011,11 @@ test_open_redirects() {
     done < "$infile"
 
     local found_count
-    found_count=$(grep -c "^URL" "$outfile" 2>/dev/null || echo 0)
+    # grep -c prints its own "0" on no match (exit 1); only fall back to 0 when
+    # the command itself fails, otherwise we get "0\n0" and a [[ -gt ]] error.
+    found_count=$(grep -c "^URL" "$outfile" 2>/dev/null) || found_count=0
     if [[ "$found_count" -gt 0 ]]; then
         warn "${BOLD}Open redirect CONFIRMED on $found_count URL(s)! → $outfile${RESET}"
-        telegram_finding "Open redirect confirmed ($found_count)" \
-            "$(grep '^URL' "$outfile" 2>/dev/null | sed 's/^URL *: *//' | head -5)"
     else
         log "No confirmed open redirects (tested $count URLs)"
     fi
@@ -1006,13 +1056,8 @@ check_cors() {
     ' 2>/dev/null || true
 
     rm -f "$hosts_file"
-    local cnt; cnt=$(wc -l < "$outfile" 2>/dev/null || echo 0)
-    if [[ $cnt -gt 0 ]]; then
-        warn "CORS issues found: $cnt → $outfile"
-        telegram_finding "CORS misconfig ($cnt)" "$(head -5 "$outfile" 2>/dev/null)"
-    else
-        log "No CORS issues found"
-    fi
+    local cnt; cnt=$(count_lines "$outfile")
+    [[ $cnt -gt 0 ]] && warn "CORS issues found: $cnt → $outfile" || log "No CORS issues found"
 }
 
 check_git_exposure() {
@@ -1033,13 +1078,8 @@ check_git_exposure() {
         done
     ' 2>/dev/null || true
 
-    local cnt; cnt=$(wc -l < "$outfile" 2>/dev/null || echo 0)
-    if [[ $cnt -gt 0 ]]; then
-        warn "${BOLD}.git exposure found: $cnt! → $outfile${RESET}"
-        telegram_finding "Exposed .git ($cnt)" "$(head -5 "$outfile" 2>/dev/null)"
-    else
-        log "No .git exposure found"
-    fi
+    local cnt; cnt=$(count_lines "$outfile")
+    [[ $cnt -gt 0 ]] && warn "${BOLD}.git exposure found: $cnt! → $outfile${RESET}" || log "No .git exposure found"
 }
 
 run_active_checks() {
@@ -1053,41 +1093,14 @@ run_active_checks() {
 # ─────────────────────────────────────────────
 # NOTIFICATIONS
 # ─────────────────────────────────────────────
-
-# HTML-escape dynamic text before it goes into a parse_mode=HTML message.
-_tg_escape() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
-
-# Low-level Telegram sender. No-ops quietly unless both token and chat id are set.
-# Resilient: bounded timeout, never aborts the run on failure.
-telegram_notify() {
-    [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]] && return 0
-    local text="$1"
-    curl -s --max-time 15 -X POST \
-        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-        --data-urlencode "text=${text}" \
-        --data "parse_mode=HTML" \
-        --data "disable_web_page_preview=true" > /dev/null 2>&1 || true
-}
-
-# Per-finding alert: $1 = short type label, $2 = affected host/url/detail.
-# Opt-in — fires only when Telegram is configured (guard in telegram_notify).
-# Never send secret VALUES here, only finding type + location/counts.
-telegram_finding() {
-    [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]] && return 0
-    telegram_notify "🚨 <b>Finding: $(_tg_escape "$1")</b>
-Target: $(_tg_escape "${DOMAIN:-$DOMAIN_LIST}")
-$(_tg_escape "$2")"
-}
-
 send_notification() {
     [[ "$NOTIFY" == false ]] && return
 
     local total_subs total_urls total_httpx200 total_vulns
-    total_subs=$(wc -l < "$OUTPUT_DIR/subdomains/all_subdomains.txt" 2>/dev/null || echo 0)
-    total_urls=$(wc -l < "$OUTPUT_DIR/urls/allurls.txt" 2>/dev/null || echo 0)
-    total_httpx200=$(wc -l < "$OUTPUT_DIR/httpx/httpx200.txt" 2>/dev/null || echo 0)
-    total_vulns=$(wc -l < "$OUTPUT_DIR/vuln/nuclei_results.txt" 2>/dev/null || echo 0)
+    total_subs=$(count_lines "$OUTPUT_DIR/subdomains/all_subdomains.txt")
+    total_urls=$(count_lines "$OUTPUT_DIR/urls/allurls.txt")
+    total_httpx200=$(count_lines "$OUTPUT_DIR/httpx/httpx200.txt")
+    total_vulns=$(count_lines "$OUTPUT_DIR/vuln/nuclei_results.txt")
 
     local msg="🔍 *Recon Complete*
 Target: ${DOMAIN:-$DOMAIN_LIST}
@@ -1108,17 +1121,6 @@ Output: $OUTPUT_DIR"
             --data "{\"content\":\"$msg\"}" "$DISCORD_WEBHOOK" > /dev/null 2>&1 || true
         log "Discord notification sent"
     fi
-
-    if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
-        telegram_notify "✅ <b>Recon Complete</b>
-Target: $(_tg_escape "${DOMAIN:-$DOMAIN_LIST}")
-Subdomains: $total_subs
-URLs: $total_urls
-Live (200): $total_httpx200
-Nuclei findings: $total_vulns
-Output: $(_tg_escape "$OUTPUT_DIR")"
-        log "Telegram notification sent"
-    fi
 }
 
 # ─────────────────────────────────────────────
@@ -1128,12 +1130,15 @@ generate_report() {
     section "Generating Summary Report"
 
     local report="$OUTPUT_DIR/reports/summary.md"
-    local total_subs total_urls live200 live403
+    local total_subs total_urls live200 live403 redirect_confirmed
 
-    total_subs=$(wc -l < "$OUTPUT_DIR/subdomains/all_subdomains.txt" 2>/dev/null || echo 0)
-    total_urls=$(wc -l < "$OUTPUT_DIR/urls/allurls.txt" 2>/dev/null || echo 0)
-    live200=$(wc -l < "$OUTPUT_DIR/httpx/httpx200.txt" 2>/dev/null || echo 0)
-    live403=$(wc -l < "$OUTPUT_DIR/httpx/httpx403.txt" 2>/dev/null || echo 0)
+    total_subs=$(count_lines "$OUTPUT_DIR/subdomains/all_subdomains.txt")
+    total_urls=$(count_lines "$OUTPUT_DIR/urls/allurls.txt")
+    live200=$(count_lines "$OUTPUT_DIR/httpx/httpx200.txt")
+    live403=$(count_lines "$OUTPUT_DIR/httpx/httpx403.txt")
+    # grep -c emits its own "0" on no match; only default to 0 when it errors,
+    # so the table cell stays a single integer instead of "0\n0".
+    redirect_confirmed=$(grep -c "^URL" "$OUTPUT_DIR/vuln/open_redirect_confirmed.txt" 2>/dev/null) || redirect_confirmed=0
 
     cat > "$report" <<EOF
 # Recon Report — $(date)
@@ -1149,13 +1154,13 @@ generate_report() {
 | Total unique URLs | $total_urls |
 | Live URLs (200) | $live200 |
 | Forbidden (403) | $live403 |
-| Zone transfers | $(wc -l < "$OUTPUT_DIR/dns/zone_transfers.txt" 2>/dev/null || echo 0) |
-| Nuclei findings | $(wc -l < "$OUTPUT_DIR/vuln/nuclei_results.txt" 2>/dev/null || echo 0) |
-| Open redirects confirmed | $(grep -c "^URL" "$OUTPUT_DIR/vuln/open_redirect_confirmed.txt" 2>/dev/null || echo 0) |
-| CORS issues | $(wc -l < "$OUTPUT_DIR/vuln/cors_misconfig.txt" 2>/dev/null || echo 0) |
-| .git exposures | $(wc -l < "$OUTPUT_DIR/vuln/git_exposure.txt" 2>/dev/null || echo 0) |
-| Open ports | $(wc -l < "$OUTPUT_DIR/ports/open_ports.txt" 2>/dev/null || echo 0) |
-| Parameters guessed | $(wc -l < "$OUTPUT_DIR/params/all_params.txt" 2>/dev/null || echo 0) |
+| Zone transfers | $(count_lines "$OUTPUT_DIR/dns/zone_transfers.txt") |
+| Nuclei findings | $(count_lines "$OUTPUT_DIR/vuln/nuclei_results.txt") |
+| Open redirects confirmed | $redirect_confirmed |
+| CORS issues | $(count_lines "$OUTPUT_DIR/vuln/cors_misconfig.txt") |
+| .git exposures | $(count_lines "$OUTPUT_DIR/vuln/git_exposure.txt") |
+| Open ports | $(count_lines "$OUTPUT_DIR/ports/open_ports.txt") |
+| Parameters guessed | $(count_lines "$OUTPUT_DIR/params/all_params.txt") |
 
 ## URL Classification
 | Category | Count |
@@ -1167,7 +1172,7 @@ EOF
         [[ "$f" == *allurls* ]] && continue
         local name count
         name=$(basename "$f" .txt)
-        count=$(wc -l < "$f" 2>/dev/null || echo 0)
+        count=$(count_lines "$f")
         [[ $count -gt 0 ]] && echo "| $name | $count |" >> "$report"
     done
 
@@ -1212,6 +1217,11 @@ $(cat "$OUTPUT_DIR/dns/cname_records.txt" 2>/dev/null | head -20 || echo "None r
 ### Interesting Subdomains
 \`\`\`
 $(cat "$OUTPUT_DIR/subdomains/interesting_subs.txt" 2>/dev/null | head -20 || echo "None found")
+\`\`\`
+
+### Top Web Servers
+\`\`\`
+$(cat "$OUTPUT_DIR/httpx/server_summary.txt" 2>/dev/null | head -20 || echo "None recorded")
 \`\`\`
 
 ## Recommendations
@@ -1271,20 +1281,10 @@ parse_args() {
             --resume)             RESUME=true; shift ;;
             --slack)              NOTIFY=true; SLACK_WEBHOOK="$2"; shift 2 ;;
             --discord)            NOTIFY=true; DISCORD_WEBHOOK="$2"; shift 2 ;;
-            --telegram)           NOTIFY=true
-                                  # Split on the LAST ':' — the bot token itself contains one.
-                                  TELEGRAM_CHAT_ID="${2##*:}"
-                                  TELEGRAM_BOT_TOKEN="${2%:*}"
-                                  shift 2 ;;
             -h|--help)            usage ;;
             *) err "Unknown option: $1"; usage ;;
         esac
     done
-
-    # Telegram can be configured purely via env vars (no flag in shell history).
-    if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
-        NOTIFY=true
-    fi
 
     # Validation
     if [[ -z "$DOMAIN" && -z "$DOMAIN_LIST" ]]; then
@@ -1294,6 +1294,15 @@ parse_args() {
     if [[ -n "$DOMAIN_LIST" && ! -f "$DOMAIN_LIST" ]]; then
         err "Domain list file not found: $DOMAIN_LIST"
         exit 1
+    fi
+    # Custom DNS resolvers (-R): fail clearly if the file is missing, then
+    # build the flag array passed to dnsx (empty when -R is not used).
+    if [[ -n "$CUSTOM_RESOLVERS" ]]; then
+        if [[ ! -f "$CUSTOM_RESOLVERS" ]]; then
+            err "Resolvers file not found: $CUSTOM_RESOLVERS"
+            exit 1
+        fi
+        RESOLVER_ARGS=(-r "$CUSTOM_RESOLVERS")
     fi
 }
 

@@ -1,0 +1,10 @@
+# Canonical source of recon.sh + setup.sh for the recon-engine skill.
+# The bundled copies in this directory are a vendored mirror of this repo; the
+# pre-hunt freshness check (recon_sync.py) compares them against it and updates
+# when stale. Do not edit recon.sh/setup.sh here by hand — change them upstream.
+repo = https://github.com/M0st8fa/Recon-Script
+branch = HEAD
+synced_commit = 4e1078185a9eb18f36bafdad21d038c23f8f70f7
+recon_sh_sha256 = 612040c759992caa63d4baa3907fba5dffd41a7d2f619a05cd32c14438d67a68
+setup_sh_sha256 = daa259244f97e5655101063eb6f4808015ea9189adea274717db597a98074e89
+synced_at = 2026-10-23

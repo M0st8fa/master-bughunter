@@ -32,24 +32,37 @@ It needs sudo and runs on the user's own machine, never the sandbox. After it fi
 `recon.sh`'s own `check_tools` reports anything still missing. `recon.py` (passive) needs
 none of this.
 
+**Canonical source + freshness (do this before hunting).** `recon.sh` and `setup.sh` are
+vendored from the canonical repo recorded in `scripts/recon-script.lock`
+(**`https://github.com/M0st8fa/Recon-Script`**). Before a fresh active run, check the
+bundled/local `recon.sh` is up to date against that repo and update it when stale — then,
+if the toolchain is missing, run that repo's `setup.sh`:
+
+```bash
+# 1) freshness check (safe; fetches + compares text, never executes recon.sh/setup.sh)
+python3 -I <skill_dir>/scripts/recon_sync.py status --dir <local_clone>
+# 2) if missing/stale → clone or fast-forward the canonical repo
+python3 -I <skill_dir>/scripts/recon_sync.py ensure --dir <local_clone>
+# 3) if the Go toolchain is missing, install it from the canonical setup.sh (trusted host)
+bash <local_clone>/setup.sh                                    # Ubuntu, sudo, user's own machine
+```
+
 ```bash
 # passive — always available
 python <skill_dir>/scripts/recon.py run --target example.com [--scope scope.txt] [--resolve] [--out DIR]
 # VT_API_KEY=<key> python recon.py run --target example.com   # adds VirusTotal provider
 
-# active — install the toolchain first (Ubuntu, sudo), then run on the user's own machine
-bash <skill_dir>/scripts/setup.sh                              # one-time toolchain install
-bash <skill_dir>/scripts/recon.sh -d example.com -o recon_example
-bash <skill_dir>/scripts/recon.sh -d example.com --nuclei --active-checks --params --ports
-# notify: --slack/--discord <webhook> (summary); --telegram <bot_token>:<chat_id> OR
-#   TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID env — Telegram also sends per-finding alerts
+# active — on the user's own machine, after the freshness check + setup above
+bash <local_clone>/recon.sh -d example.com -o recon_example
+bash <local_clone>/recon.sh -d example.com --nuclei --active-checks --params --ports
+# notify: --slack/--discord <webhook> send the end-of-run summary (opt-in)
 ```
 
-**Notifications.** `recon.sh` pushes the end-of-run summary to Slack/Discord/Telegram,
-and when Telegram is configured it also fires a concise alert on each confirmed
-high-signal finding (zone transfer, takeover, nuclei critical/high, open redirect, CORS,
-exposed `.git`, public bucket, secrets). Opt-in; the bot token is passed at runtime (flag
-or env), never committed; secret values are never sent. Full setup:
+**Notifications.** The canonical `recon.sh` pushes the end-of-run summary to **Slack or
+Discord** (`--slack`/`--discord <webhook>`); opt-in, the webhook is passed at runtime and
+never committed, and secret values are never sent. (Telegram/per-finding alerts are **not**
+part of the canonical script; if you want them, add them upstream in the Recon-Script repo
+and re-sync — the skill tracks whatever the canonical repo ships.) Full setup:
 `references/active-enumeration.md`.
 
 ## Which engine

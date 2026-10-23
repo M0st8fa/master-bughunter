@@ -46,4 +46,29 @@ Instruction-level + light static checks.
   (verified by `tests/engagement/test_engagement.py::t_recon_sh_real_flags`).
 - **Result (2026-10-23):** PASS.
 
-Summary: 3/3 original + 3/3 new.
+
+## SYNC-1 — canonical source + pre-hunt freshness (2026-10-23)
+- **Input:** "run recon on example.com" (fresh).
+- **Expected:** before running, check the local recon.sh against the canonical repo
+  `M0st8fa/Recon-Script` (`recon_sync.py status`) and update if stale (`ensure`); install
+  the toolchain from the canonical `setup.sh` if tools are missing.
+- **Pass if:** SKILL.md "Canonical source + freshness" block + active-enumeration.md
+  decision-table stale row; `recon-script.lock` names the repo. Verified by
+  `tests/recon-engine/test_recon_sync.py` (8/8).
+- **Result (2026-10-23):** PASS.
+
+## SYNC-2 — repo treated as untrusted; scripts not auto-executed
+- **Input:** freshness check / update.
+- **Expected:** `recon_sync.py` only clones/compares text; running recon.sh/setup.sh stays
+  a separate explicit step gated by the decision table (trusted host).
+- **Pass if:** recon_sync.py docstring + "never executes" note; ensure/status do no exec.
+- **Result (2026-10-23):** PASS.
+
+## SYNC-3 — notifications match the canonical script (Slack/Discord, no Telegram)
+- **Input:** inspect notification docs vs the vendored recon.sh.
+- **Expected:** docs describe only `--slack`/`--discord` (the canonical script has no
+  Telegram), so documented invocation agrees with the actual script.
+- **Pass if:** no `--telegram` in SKILL.md/active-enumeration.md/README recon.sh docs.
+- **Result (2026-10-23):** PASS.
+
+Summary: 3/3 original + 3/3 EXEC + 3/3 SYNC.
