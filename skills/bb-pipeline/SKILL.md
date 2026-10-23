@@ -5,7 +5,9 @@ description: Full bug-bounty hunting pipeline for authorized programs (Intigriti
 
 # Bug Bounty Pipeline
 
-Run authorized-target hunting as a disciplined pipeline. Authorization context must exist (a bounty program with published scope). If the user names no program and no scope, ask for the program page/scope before any active work.
+Run authorized-target hunting as a disciplined pipeline. Authorization context must exist (a bounty program with published scope).
+
+**Establish the engagement once, then run continuously.** At the start, load or create the engagement manifest through the `engagement` skill (`engagement.py`). If a manifest with `authorization.established: true` already exists for this program, **reuse it** and continue from the saved phase — do not re-confirm scope or re-interview. If none exists and the user has named no program and no scope, ask **once** for the program page/scope, then persist it. After the manifest exists, **do not ask the user to approve or advance each phase** — move through the pipeline automatically, pausing only for the human-judgment gates in `docs/SAFETY.md` (destructive/disruptive production tests, material scope ambiguity, program-prohibited actions, mass test-account creation, payment-flow testing, report submission). The manifest carries scope, exclusions, rate limits, required headers, restrictions, recon state, current phase, and completed work; pass it to every specialist so none restarts the authorization interview or recon.
 
 ## Prime directives (read first)
 
@@ -20,10 +22,11 @@ Run authorized-target hunting as a disciplined pipeline. Authorization context m
 
 Run in order. Skip only phases the user explicitly excludes.
 
-### Phase 0 — Workspace & scope
+### Phase 0 — Engagement, workspace & scope
 - `mkdir -p recon/{subdomains,js,ips,findings}`; start `audit.log`.
-- Parse the program scope into: in-scope host patterns, out-of-scope patterns, known-issues (do not report), forbidden actions.
-- Ask for (and record) researcher identifier for mandatory headers if the program requires one.
+- **Load or create the engagement manifest:** `engagement.py --workspace recon resume`; if absent, `engagement.py init --program … --roots … --exclude … --restrictions …`. This parses the program scope into in-scope roots, out-of-scope patterns, known-issues/forbidden actions, rate limits, and required headers **once** and persists them. Extract these from the supplied program page/files automatically instead of re-asking.
+- Record the researcher identifier for mandatory headers **in the manifest** (`--researcher-tag` / `--header`, non-secret) once — not per request. Never put tokens/cookies in the manifest.
+- **Recon branch:** if the user supplied an existing recon directory, go to Phase 1b (import) instead of running fresh recon. If `recon.status` is already `running`/`complete`/`imported`, do not re-run.
 
 ### Phase 1 — Passive subdomain recon (multi-source, escalate per round)
 Use `scripts/passive_recon.sh <domain>` (bundled) — 8 passive sources in parallel: certspotter, crt.name, rapiddns, Wayback CDX (root + interesting wildcards), urlscan, ctl.shodan. Then:
@@ -35,6 +38,13 @@ Use `scripts/passive_recon.sh <domain>` (bundled) — 8 passive sources in paral
   - `vtapi/v2/domain/report?domain=<host>` — `detected_urls` shows archived parameterized endpoints (tokens, IDs in query strings) and `domain_siblings`.
 - **Wildcard-DNS zones**: if `*.foo.target.com` answers the same IP for any name, DNS is useless for discovery — brute **vhosts** by Host header instead and diff response signatures (a wildcard zone hid a live API behind `test.`/`demo.` labels). Extract the TLS cert SANs (`openssl s_client` + `x509 -text`) — wildcard certs confirm nothing, SANs with real names are leads.
 - Fingerprint everything alive (status, server, title, redirect, first bytes) and sort: login-gated / IAP-gated / open apps / internal-only (10.x answering public DNS = topology leak, Low).
+
+For **active depth** (DNS brute-force, live crawling, HTTP probing, ~30-bucket URL classification, opt-in checks) on the resolved in-scope set, hand off to **recon-engine**'s `scripts/recon.sh` — the standard active engine — run wherever a terminal + toolchain are available (see recon-engine's execution decision table). Then ingest its output dir (Phase 1b). Do not silently downgrade a requested active run to passive-only.
+
+### Phase 1b — Import existing recon (when the user supplies a recon folder)
+If the user already has recon output, **start from it instead of re-running recon**:
+- `python3 -I <engagement>/scripts/ingest_recon.py <recon_dir> --workspace recon` — inventories the directory (txt/csv/json/jsonl), reads run config/logs first (records which tools ran/failed/were skipped — a failed tool is missing evidence, never coverage), builds a deduplicated `inventory.jsonl` preserving method/param/endpoint variants with provenance, scope-classifies every URL, and keeps out-of-scope URLs in a separate `excluded_inventory.jsonl` that is never scheduled.
+- Schedule **every** distinct in-scope URL (`--next-batch N [--route <specialist>]`), not just the homepage or first lines; batch, persist per-URL `test_status`, and resume from the inventory if interrupted. Route by endpoint semantics to the specialists below.
 
 ### Phase 2 — JS recon
 Hand every JS bundle URL found in HTML/manifests/history/**wayback** to the **js-recon** skill (its `scripts/mine_js.py` does download + extraction in one pass). Deliverables: API path dictionary, GraphQL operation list, secret scan, internal-host inventory, microfrontend maps, per-environment config maps (prod/staging/QA URL sets leak the whole topology).
@@ -60,7 +70,7 @@ Use the **idor-runner** skill. Its script enforces the discipline that matters: 
 
 ### Phase 5 — Escalation & chains (with real-bug precedent)
 For each finding, try to chain to full impact (IDOR → PII exfil on own accounts; info leak → account enumeration → verify it's not on the known-issues list). Then **calibrate against the bb-disclosures corpus** (11,338 real paid reports):
-- `python C:/Users/Admin/.agents/skills/bb-disclosures/scripts/query.py --q "<pattern>" --min-bounty 1000` — what did similar bugs pay, and what element did the expensive ones have that yours lacks? Close that delta or temper the claim.
+- `python3 -I <skills>/bb-disclosures/scripts/query.py --q "<pattern>" --min-bounty 1000` (use the skill's own path in your install) — what did similar bugs pay, and what element did the expensive ones have that yours lacks? Close that delta or temper the claim.
 - Re-check every candidate against the program's out-of-scope list before writing it up — most "bugs" on real programs are pre-declared known issues (redirects, missing headers, enumeration, rate limits).
 
 ### Phase 6 — Report
@@ -92,7 +102,10 @@ Use the **bb-report** skill. One `recon/findings/report.md`: every bug with Titl
 | Write/format findings | **bb-report** |
 
 ## Session continuity
-If a `recon/` workspace exists for the target, read `audit.log` tail + `findings/report.md` first and continue from the recorded state instead of re-running recon. Multi-program hunts: one directory per program under a shared `hunt/` root with a shared `audit.log`.
+If a `recon/` workspace exists for the target, load the engagement manifest (`engagement.py resume`) + `audit.log` tail + `inventory.jsonl` + `findings/report.md` first and continue from the recorded phase and per-URL status instead of re-running recon or re-confirming scope. Completed checks and recorded findings are preserved; do not repeat a completed check without a reason (new evidence, a failed test, or a coverage gap). Multi-program hunts: **one workspace per program** (each with its own manifest — authorization never crosses programs) under a shared `hunt/` root.
+
+## Coverage review (before calling a hunt done)
+Read `inventory.jsonl`: which in-scope URLs were analyzed, which applicable checks passed, which failed, which remain `pending`. Do not claim full coverage while eligible in-scope work is unprocessed or a tool failure (see the manifest's `recon.tool_status`) left a gap — report those gaps honestly.
 
 ## Campaign playbooks (read before long hunts)
 `references/hunt-playbooks.md` — program-selection discipline, narrow-vs-wide recon switching, asset discovery beyond crt.sh CN (Organization-field certs, ASN pivots, corporate-blog mining), parameter bruteforcing (x8/GAP), session-upgrade flow bugs, and hours-based goal setting. Distilled from three $7k–$20k documented campaigns.

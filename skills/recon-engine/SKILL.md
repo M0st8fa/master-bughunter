@@ -1,6 +1,6 @@
 ---
 name: recon-engine
-description: Two-engine recon for authorized bug bounty / attack-surface mapping. PASSIVE brain (scripts/recon.py, stdlib, no keys, sandbox-safe) collects subdomains/URLs/IPs/providers from crt.sh, Shodan CTL, HackerTarget, CertSpotter, urlscan, Wayback, VirusTotal (with VT_API_KEY) and RDAP into BadRecon-style artifacts (subdomains.csv, urls.csv, ips.csv, providers.json, recon_notes.md, FINDINGS.md), scope-matched. ACTIVE muscle (scripts/recon.sh) chains the Go bug-bounty suite (subfinder, dnsx, waybackurls/gau, katana, gospider, httpx, + opt-in nuclei/gowitness/gitleaks/arjun/naabu/subzy) for DNS brute-force, live crawling, HTTP probing, ~30-bucket URL classification and opt-in active checks — runs on the USER's own machine with those tools, never in the sandbox. Use whenever the user asks for recon, subdomain enumeration, attack-surface mapping, "find subdomains/URLs/assets for X", or "run recon on" any target.
+description: Two-engine recon for authorized bug bounty / attack-surface mapping. PASSIVE brain (scripts/recon.py, stdlib, no keys, sandbox-safe) collects subdomains/URLs/IPs/providers from crt.sh, Shodan CTL, HackerTarget, CertSpotter, urlscan, Wayback, VirusTotal (with VT_API_KEY) and RDAP into BadRecon-style artifacts (subdomains.csv, urls.csv, ips.csv, providers.json, recon_notes.md, FINDINGS.md), scope-matched. ACTIVE muscle (scripts/recon.sh) chains the Go bug-bounty suite (subfinder, dnsx, waybackurls/gau, katana, gospider, httpx, + opt-in nuclei/gowitness/gitleaks/arjun/naabu/subzy) for DNS brute-force, live crawling, HTTP probing, ~30-bucket URL classification and opt-in active checks — the standard engine for fresh active recon, run wherever a terminal and the toolchain are available (install via setup.sh), not a sandbox-only passive fallback. Use whenever the user asks for recon, subdomain enumeration, attack-surface mapping, "find subdomains/URLs/assets for X", or "run recon on" any target.
 ---
 
 # Recon Engine — passive brain + active muscle
@@ -11,10 +11,17 @@ handoff); the scripts are the **muscle** (enumeration).
 - **`scripts/recon.py` — passive engine.** Stdlib Python, no keys required, safe to run
   anywhere including this sandbox. Multi-source intelligence collection; the only traffic
   touching the target is optional DNS resolution.
-- **`scripts/recon.sh` — active engine.** Bash pipeline chaining the standard Go
-  bug-bounty toolchain. Breadth and depth on a scoped, authorized target. Runs **on the
-  user's own machine where those tools are installed — not in this sandbox**; this skill
-  never executes it for the user. Full guide: `references/active-enumeration.md`.
+- **`scripts/recon.sh` — active engine (the standard engine for fresh recon).** Bash
+  pipeline chaining the standard Go bug-bounty toolchain. Breadth and depth on a scoped,
+  authorized target. **Execution is conditional on the environment, not forbidden:** run
+  it directly whenever you have a local terminal (Bash tool / shell) **and** the script is
+  present **and** its toolchain is installed; only then does it do real work. If a
+  prerequisite is missing — no shell, `recon.sh` not found, or `check_tools` reports the
+  Go suite absent — report the **precise** blocker (which of those three) and either run
+  `scripts/setup.sh` first or fall back to `recon.py` for passive breadth. Do **not** claim
+  a blanket "cannot run recon.sh," and do **not** silently substitute `recon.py` for a
+  requested active run. Full guide + the execution decision table:
+  `references/active-enumeration.md`.
 
 **Install the toolchain first (for `recon.sh`).** `recon.sh` needs the Go bug-bounty
 suite installed. On a fresh Ubuntu (20.04/22.04/24.04) machine, have the user run
@@ -47,13 +54,23 @@ or env), never committed; secret values are never sent. Full setup:
 
 ## Which engine
 
-- **Default / sandbox / no tools installed / first passive map → `recon.py`.**
-- **User has the Go toolchain + an authorized, scoped target → `recon.sh`** for active
+- **Fresh active recon on an authorized, scoped target → `recon.sh` (standard).** Run it
+  wherever a terminal + the toolchain are available — including this environment when it
+  has a shell and the tools are installed. It is the requested engine for active
   subdomain brute-force, live crawling, HTTP probing, classification and opt-in checks.
+- **No shell / toolchain absent / first passive map / keyless API-source intel →
+  `recon.py`.** The passive layer that runs anywhere, including a locked-down sandbox.
 - **Best practice:** run `recon.py` for passive breadth, then `recon.sh` for depth on the
-  resolved in-scope set. `recon.py` is **not** superseded — it is the passive/API-source
-  layer and the only one that runs with no tools. See the comparison and full flag/output
-  reference in `references/active-enumeration.md`.
+  resolved in-scope set. `recon.py` is **not** superseded, and it is **not** a silent
+  substitute for a requested `recon.sh` run — it is the passive/API-source layer and the
+  only one that runs with no tools. See the comparison, the execution decision table, and
+  the full flag/output reference in `references/active-enumeration.md`.
+
+**Before launching, check for an in-flight or completed run.** If the engagement manifest
+(`engagement.py`) reports `recon.status: running` or a recon dir already exists, do **not**
+start a duplicate scan — resume (`recon.sh --resume -o <dir>`) or ingest the existing
+output instead (see `engagement` skill → `ingest_recon.py`). When a run finishes, hand its
+output directory straight to the hunting workflow (`ingest_recon.py <dir>`).
 
 **Passive-first always.** Prefer passive collection; active modules that send traffic to
 the target (`recon.sh` crawlers and especially its opt-in `--nuclei`, `--screenshots`,

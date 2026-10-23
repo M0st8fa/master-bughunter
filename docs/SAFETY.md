@@ -5,10 +5,17 @@ responsible disclosure. These rules bind every skill and command.
 
 ## Authorization & scope
 - No active testing without an authorization basis: an in-scope bug bounty program, a
-  signed engagement, a lab/CTF, or the user's own system. `security-hunt` enforces this
-  gate; specialists re-check it.
+  signed engagement, a lab/CTF, or the user's own system.
+- The authorization + scope gate runs **once per engagement** (`security-hunt` / the
+  `engagement` skill) and is persisted in the engagement manifest. Specialists **inherit**
+  that established context — they enforce scope on every request (never touch an
+  out-of-scope or unclassified host) but do **not** restart the authorization interview or
+  re-ask permission for routine authorized work. A new or materially changed scope starts
+  a fresh engagement; authorization never carries to unrelated targets.
 - Respect published scope and exclusions, rate limits, and destructive-testing rules.
-- When authorization is unclear, stop and ask. Passive study of public artifacts is the
+  Out-of-scope assets are recorded in a separate excluded inventory and never tested.
+- When authorization is genuinely absent or contradictory, ask **one** consolidated
+  question after exhausting supplied materials. Passive study of public artifacts is the
   only thing that proceeds meanwhile.
 
 ## Minimal impact
@@ -34,7 +41,12 @@ responsible disclosure. These rules bind every skill and command.
 - Own-account PoCs only for cross-account bugs — never touch a third party's data.
 
 ## Human-in-the-loop
-- Consequential or risky actions require explicit user approval.
+- Consequential or risky actions require explicit user approval. Automating routine
+  authorized research removes repeated *confirmations*, never these gates. The gates:
+  destructive or disruptive production testing; a **material** scope ambiguity; an action
+  the program expressly prohibits or restricts; mass test-account creation; payment-flow
+  testing; and external report submission (or any other consequential external action).
+- Everything else in an established engagement proceeds without per-action prompting.
 - The self-learning loop never auto-applies changes; `/skills-update` acts only on
   `approved` queue items.
 

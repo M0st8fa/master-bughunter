@@ -7,12 +7,29 @@ authorized to test. The skill is the brain (scope, decisioning, triage, handoff)
 script is the muscle (enumeration).
 
 > **Runtime caveat — read first.** `recon.sh` is a Bash pipeline that shells out to
-> external tools (subfinder, dnsx, httpx, katana, …). It only works on a machine where
-> those tools are installed, and it must be run **by the user, on the user's own
-> machine**, against a target inside an authorized program's scope. It does **not** run
-> inside this project's sandbox, and this skill never executes it on the user's behalf.
-> Claude's job is to prepare scope, tell the user the exact command, and then interpret
-> the files the run produces.
+> external tools (subfinder, dnsx, httpx, katana, …). It does real work only on a machine
+> where those tools are installed, run against a target inside an authorized program's
+> scope. **Whether Claude executes it is conditional on the environment, not a blanket
+> no:** when a local terminal (the Bash/shell tool) is available **and** `recon.sh` is
+> present **and** its toolchain is installed, run it directly and then interpret the
+> output. When a prerequisite is missing, report the *precise* blocker and either install
+> the toolchain (`scripts/setup.sh`) or prepare the exact command for the user to run on
+> their own machine. Never silently substitute `recon.py` for a requested active run.
+
+### Execution decision table (run it, or report the exact blocker)
+
+| Condition | Action |
+|---|---|
+| Shell available + `recon.sh` present + toolchain installed | **Run `recon.sh` directly** on the in-scope roots; hand the output dir to `ingest_recon.py`. |
+| Shell available + `recon.sh` present + toolchain missing | Run `scripts/setup.sh` (Ubuntu, sudo) to install, then run `recon.sh`. If setup can't run, report "toolchain missing" + the exact command. |
+| Shell available + `recon.sh` not found | Report "recon.sh not found at `<path>`"; locate it (`$PATH`, repo `scripts/`, `/root/recon.sh`) before constructing any command. |
+| No shell / locked-down sandbox | Report "no local terminal"; use `recon.py` for passive breadth and prepare the `recon.sh` command for the user's machine. |
+| A recon job is already running / output exists | Do **not** launch a duplicate; `--resume` or ingest the existing directory. |
+
+Inspect the actual script's `usage()` before building a command — never invent flags.
+`recon.sh` accepts `-d <domain>` / `-l <file>`, `-o <dir>`, `-v`, tuning (`-t -r -D -T -w
+-R`), `--skip-*`, opt-in `--nuclei --screenshots --gitleaks --params --ports
+--test-redirects --active-checks`, `--resume`, and `--slack/--discord/--telegram`.
 
 ## When to use which engine
 

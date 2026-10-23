@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/M0st8fa/master-bughunter/schemas/engagement.schema.json",
+  "title": "Engagement Manifest",
+  "description": "Persistent per-engagement authorization + scope + progress state for the hunting ecosystem. Established ONCE per engagement and reused on resume. Never stores raw credentials, cookies, API secrets, or other sensitive authentication material.",
+  "type": "object",
+  "required": ["engagement_id", "program", "authorization", "scope", "recon", "phase"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "default": "1.0" },
+    "engagement_id": {
+      "type": "string",
+      "description": "Stable slug identifying this engagement (derived from the program id). A new or materially changed scope gets its own engagement_id; authorization is never carried across engagements."
+    },
+    "program": {
+      "type": "object",
+      "required": ["id", "scope_source"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "Program identifier, e.g. 'hackerone:acme', 'intigriti:acme', or a user-supplied label." },
+        "platform": { "type": "string", "description": "hackerone | intigriti | bugcrowd | private | self | lab-ctf" },
+        "scope_source": { "type": "string", "description": "Where the scope/authorization came from: a program URL, a local file path, or an explicit user statement. Provenance, not a secret." },
+        "researcher_tag": { "type": "string", "description": "Non-secret researcher identifier used in required headers (e.g. the X-Intigriti username or H1 handle). NOT a token/cookie." }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "required": ["established", "basis"],
+      "additionalProperties": false,
+      "properties": {
+        "established": { "type": "boolean", "description": "True once the one-time authorization gate has passed for this engagement. When true, routine authorized research proceeds without re-asking." },
+        "basis": { "type": "string", "description": "bug-bounty-program | signed-engagement | lab-ctf | own-system" },
+        "posture": { "type": "string", "enum": ["production", "lab"], "description": "Production => non-destructive proof only." },
+        "established_at": { "type": "string", "description": "UTC timestamp (YYYY-MM-DDTHH:MM:SSZ) when the gate passed." }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "required": ["in_scope_roots", "exclusions"],
+      "additionalProperties": false,
+      "properties": {
+        "in_scope_roots": { "type": "array", "items": { "type": "string" }, "description": "Host/apex/wildcard patterns in scope, e.g. ['*.acme.com','api.acme.io']." },
+        "exclusions": { "type": "array", "items": { "type": "string" }, "description": "Explicitly out-of-scope patterns; enforced even when a matching URL appears in recon output." },
+        "rate_limit_rps": { "type": ["number", "null"], "description": "Max requests/second permitted by program rules. Null => conservative default (<=5 rps)." },
+        "required_headers": { "type": "object", "description": "Non-secret headers the program requires on every request (e.g. {\"X-Intigriti\":\"<tag>\"}). Never stores auth tokens." },
+        "testing_restrictions": { "type": "array", "items": { "type": "string" }, "description": "Program prohibitions/restrictions: forbidden endpoints, no-automated-scanning, no-DoS, payment-flow rules, known-issues/dupes, etc." }
+      }
+    },
+    "recon": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["none", "running", "complete", "imported", "stale", "failed"], "description": "none=not started; running=a job is in progress (do not launch a duplicate); complete=fresh recon.sh finished; imported=an existing recon directory was ingested; stale/failed per logs." },
+        "engine": { "type": "string", "enum": ["recon.sh", "recon.py", "imported", "none"], "description": "Which engine produced the active recon dir. recon.sh is the standard active engine; recon.py is the passive layer; imported=user-supplied directory." },
+        "recon_dir": { "type": ["string", "null"], "description": "Path to the recon output directory (fresh or supplied)." },
+        "inventory": { "type": ["string", "null"], "description": "Path to the deduped master URL inventory (inventory.jsonl)." },
+        "excluded_inventory": { "type": ["string", "null"], "description": "Path to the separate out-of-scope inventory; these URLs are never scheduled for testing." },
+        "tool_status": { "type": "object", "description": "Per-tool run outcome parsed from recon logs/run_config: ok | failed | skipped | missing. A failed/skipped tool is missing evidence, never reported as coverage." }
+      }
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["setup", "scope", "recon", "import", "inventory", "intel", "routing", "validation", "evidence", "report", "coverage", "complete"],
+      "description": "Current workflow phase. On resume, continue from the next incomplete phase rather than restarting."
+    },
+    "completed_work": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Timestamped record of finished phases/batches so a resumed session does not repeat completed checks."
+    },
+    "notes": { "type": "string", "description": "Free-form non-secret engagement notes." }
+  }
+}

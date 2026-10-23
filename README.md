@@ -21,28 +21,31 @@ system scores and validates every skill; and a human-approved, file-based improv
 lets the library get better over time without ever auto-applying changes to a target or to
 itself.
 
-- **32 skills** — 1 orchestrator (`security-hunt`) + 31 specialists (recon &
-  intelligence, per-bug-class hunters, API/cloud/detection, pipeline & calibration,
+- **33 skills** — 1 orchestrator (`security-hunt`) + the `engagement` support skill
+  (persistent authorization/scope state + recon-folder ingestion) + 31 specialists (recon
+  & intelligence, per-bug-class hunters, API/cloud/detection, pipeline & calibration,
   reporting). Full catalog: [`SKILL_INDEX.md`](SKILL_INDEX.md).
 - **10 self-learning commands** (`/skills-*`) — a controlled, human-approved
   Observe → Verify → Propose → Test → Approve → Update loop.
 - **Quality system** — a 12-category rubric ([`docs/QUALITY_RUBRIC.md`](docs/QUALITY_RUBRIC.md)),
   a stdlib-only static validator ([`scripts/validate_skills.py`](scripts/validate_skills.py),
-  currently **32/32 pass, 0 errors**), and JSON schemas ([`schemas/`](schemas/)).
+  currently **33/33 pass, 0 errors**), and JSON schemas ([`schemas/`](schemas/)).
 - **Persistent ledgers** — `SOURCES.md`, `CHANGELOG.md`, `RESEARCH_LOG.md`,
   `LEARNING_LOG.md`, `COVERAGE.md`, `TEST_RESULTS.md`, `IMPROVEMENT_QUEUE.md`.
 
 ## Skill index
 
-Start with **`security-hunt`** — it confirms authorization and scope, then routes to the
-right specialist. Status is `validated` (behavioral tests passed) or `under-review` (passes
+Start with **`security-hunt`** — it establishes authorization and scope **once** (persisted
+by the `engagement` skill), then routes to the right specialist and runs continuously
+without re-asking at each step. Status is `validated` (behavioral tests passed) or `under-review` (passes
 static validation, behavioral set pending). Full table in [`SKILL_INDEX.md`](SKILL_INDEX.md).
 
 **Orchestration**
-- `security-hunt` — entry router: authorization/scope gate → classify → dispatch → track findings → deliverables.
+- `security-hunt` — entry router: one-time authorization/scope gate → classify → dispatch → track findings → deliverables.
+- `engagement` — persistent engagement manifest (establish authorization once, resume without re-gating) + first-class recon-folder ingestion (dedup master URL inventory, scope split, specialist routing, resume). See [`docs/ENGAGEMENT.md`](docs/ENGAGEMENT.md).
 
 **Recon & intelligence**
-- `recon-engine` — passive brain (`recon.py`, keyless/sandbox-safe) + active muscle (`recon.sh`, Go toolchain, runs on your machine) · `badrecon` · `footprinting` · `target-intelligence` · `js-recon` · `js-audit` · `signup-agent` (authorized account creation for testing).
+- `recon-engine` — passive brain (`recon.py`, keyless/sandbox-safe) + active muscle (`recon.sh`, Go toolchain — the standard engine for fresh active recon, run wherever a terminal + toolchain are available) · `badrecon` · `footprinting` · `target-intelligence` · `js-recon` · `js-audit` · `signup-agent` (authorized account creation for testing).
 
 **Vulnerability hunters (bug class → skill)**
 - `bb-authz` (access control / IDOR / BOLA / privesc) · `idor-runner` · `bb-xss` · `bb-domxss` · `bb-sqli` · `bb-ssrf` · `bb-csrf` · `bb-rce` · `bb-bizlogic` · `bb-race` · `bb-upload` · `bb-oauth` · `bb-graphql` · `bb-pii`.
@@ -150,7 +153,7 @@ Drive the improvement loop with the `/skills-*` commands:
 
 ```
 master-bughunter/
-├─ skills/        32 skills (each a dir: SKILL.md + optional references/scripts/assets)
+├─ skills/        33 skills (each a dir: SKILL.md + optional references/scripts/assets)
 ├─ commands/      /skills-* self-learning command catalog (.md)
 ├─ references/    shared knowledge (deduped)
 ├─ scripts/       validate_skills.py and utilities

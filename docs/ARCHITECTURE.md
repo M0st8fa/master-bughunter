@@ -34,6 +34,11 @@ Layer 6   self-learning — commands/skills-*  over the persistent ledgers
 - **Findings** conform to `schemas/finding.schema.json` (evidence-first; `status`
   starts at `hypothesis`; `authorization` required).
 - **Lessons** conform to `schemas/lesson.schema.json` (de-identified; evidence class).
+- **Engagement state** conforms to `schemas/engagement.schema.json` — the persistent
+  per-engagement manifest (authorization established once, scope, rate limits,
+  restrictions, recon status, phase, completed work; never secrets). Owned by the
+  `engagement` skill; format + resume rules in `docs/ENGAGEMENT.md`. The orchestrator and
+  every specialist read it so authorization is gated once, not re-asked per action.
 
 ## The self-learning loop (Layer 6)
 `Observe → Collect → Verify → Compare → Propose → Test → Approve → Update → Measure`.
@@ -47,9 +52,13 @@ runtime gives the library no scheduler of its own; see `docs/SAFETY.md` and
 `docs/KNOWN_LIMITATIONS.md`.
 
 ## Routing rules (summary)
-`security-hunt` maps objective → phase → skill (recon → intel → exploit → validate →
-report), reuses prior results within a session, and asks for authorization/missing
-inputs before active work. Full map in `skills/security-hunt/SKILL.md`.
+`security-hunt` maps objective → phase → skill (setup → scope → recon|import → inventory →
+intel → routing → validation → evidence → report → coverage), establishes the
+authorization/scope gate **once** (persisted via the `engagement` skill), reuses it on
+resume, and then runs continuously — choosing the next stage automatically and pausing
+only for the human-judgment gates in `docs/SAFETY.md`. Fresh targets go to `recon.sh`;
+a supplied recon folder is ingested without re-running recon. Full map in
+`skills/security-hunt/SKILL.md`.
 
 ## Naming conventions
 - Web bug-class hunters: `bb-<class>`. Recon/intel: descriptive (`recon-engine`,

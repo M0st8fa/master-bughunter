@@ -5,6 +5,51 @@ Format: reverse-chronological. Dates are absolute (YYYY-MM-DD).
 
 ## [Unreleased]
 
+### 2026-10-23 — Persistent authorization, autonomous hunting & recon-first workflow
+- **New `engagement` skill (orchestration-support)** — persistent engagement manifest
+  (`engagement.json`, schema `schemas/engagement.schema.json`). `scripts/engagement.py`
+  runs the authorization + scope gate **once per engagement**, persists program id, scope
+  source, in-scope roots, exclusions, rate limits, required headers (non-secret), testing
+  restrictions, posture, recon status, current phase, and completed work; `init` is
+  idempotent (reuse on resume, no re-gate), a different program is a conflict (fresh
+  workspace). Scope classifier (in/out/needs-clarification; exclusions beat inclusions;
+  wildcard-aware). A secret-shape guard **refuses** credentials/cookies/tokens so they
+  never enter persistent state. Commands: `init`, `show`, `classify`, `set`, `resume`.
+- **First-class recon-folder ingestion** — `scripts/ingest_recon.py` inventories a
+  supplied recon directory (recon.sh layout / BadRecon / ad-hoc), reads run config + logs
+  first (records per-tool ran/failed/skipped — a failed tool is missing evidence, never
+  coverage), extracts URLs from `.txt/.csv/.json/.jsonl`, builds a deduplicated
+  `inventory.jsonl` preserving method/param/endpoint variants with provenance, scope-splits
+  into a separate `excluded_inventory.jsonl` (never scheduled), routes each in-scope URL to
+  specialists by endpoint semantics, and tracks per-URL `test_status` for resume. A
+  `--next-batch` scheduler yields every distinct in-scope URL (no arbitrary cap).
+- **Stopped repeated authorization prompts (ecosystem-wide, boundaries intact).**
+  `security-hunt` Step 0 is now a one-time engagement gate (resume reuses it); added a
+  "stop re-asking" rule, a unified continuous workflow (setup→scope→recon|import→inventory
+  →intel→routing→validation→evidence→report→coverage), engagement-context pass-through to
+  specialists, and a tightened human-judgment gate list (destructive prod tests, material
+  scope ambiguity, program-prohibited actions, mass test-account creation, payment flows,
+  report submission). `bb-pipeline` loads/creates the manifest once, no longer asks to
+  advance each phase, added Phase 1b (import existing recon) and coverage review, and fixed
+  a hardcoded `C:/Users/Admin/...` bb-disclosures path. `docs/SAFETY.md` reworded
+  "specialists re-check it" → specialists **inherit** the established context (enforce
+  scope, don't re-interview) and listed the remaining approval gates.
+- **recon.sh is the standard active engine; execution is conditional, not forbidden.**
+  Replaced the blanket "this skill never executes recon.sh" claims in
+  `skills/recon-engine/SKILL.md` and `references/active-enumeration.md` with an execution
+  decision table: run it directly when a terminal + the script + toolchain are available;
+  otherwise report the **precise** blocker (no shell / script missing / toolchain missing)
+  and install or prepare the exact command — never silently fall back to `recon.py` for a
+  requested active run, never launch a duplicate over a running/existing job. Documented
+  invocation verified against the script's real `usage()` flags (no invented flags).
+- **Docs & index:** new `docs/ENGAGEMENT.md` (manifest format + resume + scope rules);
+  `SKILL_INDEX.md`/`README.md`/`docs/ARCHITECTURE.md` updated (33 skills; engagement data
+  contract). **Tests:** `tests/engagement/` — runnable `test_engagement.py` (28 checks
+  across the 12 required behaviors, mock fixtures, no live scan) + instruction-level
+  `scenarios.md`; new scenarios added to security-hunt/recon-engine/bb-pipeline.
+- **Boundaries preserved:** no scope enforcement removed, `docs/SAFETY.md` intact and
+  strengthened, validator/quality rules unchanged, no secrets in state/logs/reports.
+
 ### 2026-10-17 — recon-engine: Telegram notifications in recon.sh (run summary + per-finding alerts)
 - Added Telegram support to `scripts/recon.sh`, mirroring the existing Slack/Discord notify
   pattern. Config via `--telegram <bot_token>:<chat_id>` (split on the last colon, since bot
