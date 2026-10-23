@@ -70,26 +70,35 @@ def is_log_or_config(path):
     return stem in _LOG_STEMS
 
 
+def _strip_userinfo(netloc):
+    """Drop any user:pass@ from a netloc (host[:port] only). Returns (clean, had_userinfo)."""
+    if "@" in netloc:
+        return netloc.rsplit("@", 1)[-1], True
+    return netloc, False
+
+
 def redact_url(url):
-    """Replace the values of sensitive query params (and any secret-shaped value) with
-    REDACTED, preserving param NAMES so dedup (which keys on names) is unaffected."""
+    """Make a URL safe to persist: strip HTTP-basic-auth userinfo (user:pass@) and
+    replace the values of sensitive/secret query params with REDACTED. Preserves param
+    NAMES so dedup (which keys on names) is unaffected. Applies even when there is no
+    query string, so credentials never reach an inventory row."""
     try:
         sp = urlsplit(url)
     except ValueError:
         return url
-    if not sp.query:
-        return url
-    changed = False
+    netloc, had_userinfo = _strip_userinfo(sp.netloc)
     out = []
+    changed = False
     for k, v in parse_qsl(sp.query, keep_blank_values=True):
         if v and (k.lower() in SENSITIVE_PARAMS or eng.looks_secret(v) or eng.looks_secret(f"{k}={v}")):
             out.append((k, "REDACTED"))
             changed = True
         else:
             out.append((k, v))
-    if not changed:
+    if not changed and not had_userinfo:
         return url
-    return urlunsplit((sp.scheme, sp.netloc, sp.path, urlencode(out), sp.fragment))
+    new_query = urlencode(out) if changed else sp.query
+    return urlunsplit((sp.scheme, netloc, sp.path, new_query, sp.fragment))
 
 
 # ---- url normalization + dedup key ---------------------------------------------
@@ -320,13 +329,21 @@ def write_jsonl(path, rows):
     os.replace(tmp, path)  # atomic: resume state is never lost to a half-written file
 
 
-def _reclassify(inventory, excluded, roots, excl):
+def _status_rank(s):
+    # progress order: anything other than pending/excluded (e.g. "done") is real work.
+    return {"excluded": 0, "pending": 1}.get(s, 2)
+
+
+def _reclassify(inventory, excluded, roots, excl, has_manifest):
     """Re-classify every stored row against the CURRENT scope and move it between the two
-    stores when its class changed (e.g. a host newly excluded, or newly in scope). Keeps
-    checks_done/evidence/findings/sources; resets route+test_status only on a scope change.
-    Without roots/excl (no manifest) nothing is reclassified, so rows aren't all wiped to
-    needs_clarification."""
-    if not (roots or excl):
+    stores when its class changed (host newly excluded, newly in scope, or scope cleared).
+    Keeps checks_done/evidence/findings/sources and never downgrades a completed status.
+
+    - No manifest at all (`has_manifest` False): leave rows as-is (don't wipe everything to
+      needs_clarification just because scope is unknown this run).
+    - Manifest present but scope empty: every previously in-scope row becomes
+      needs_clarification so the scheduler stops offering it."""
+    if not has_manifest:
         return
     for src_store in (inventory, excluded):
         for key, r in list(src_store.items()):
@@ -349,7 +366,10 @@ def _reclassify(inventory, excluded, roots, excl):
                 dest[key] = r
                 continue
             kept = dest[key]  # merge into the existing row at that key, preserving history
-            kept["scope"], kept["route"], kept["test_status"] = r["scope"], r["route"], r["test_status"]
+            kept["scope"], kept["route"] = r["scope"], r["route"]
+            # never let a stale duplicate reopen completed work: keep the stronger status
+            if _status_rank(r["test_status"]) > _status_rank(kept["test_status"]):
+                kept["test_status"] = r["test_status"]
             for field in ("sources", "checks_done", "evidence", "findings"):
                 kept[field] += [x for x in r.get(field, []) if x not in kept[field]]
 
@@ -371,7 +391,7 @@ def ingest(recon_dir, workspace):
     inventory = load_jsonl(inv_path)        # resume: preserve prior status/evidence
     excluded = load_jsonl(exc_path)
     # If scope/exclusions changed since a prior ingest, correct stored rows first.
-    _reclassify(inventory, excluded, roots, excl)
+    _reclassify(inventory, excluded, roots, excl, has_manifest=manifest is not None)
 
     files_seen, raw_urls, added, updated = 0, 0, 0, 0
     files_skipped = []

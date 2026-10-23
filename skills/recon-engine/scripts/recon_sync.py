@@ -71,22 +71,45 @@ def _have_git():
         return False
 
 
+def _norm_repo(url):
+    """Normalize a git remote URL for comparison: lowercase, drop scheme/userinfo, a
+    trailing .git and slash, and ssh vs https forms of the same GitHub repo."""
+    u = (url or "").strip().lower().rstrip("/")
+    u = re.sub(r"\.git$", "", u)
+    u = re.sub(r"^git@([^:]+):", r"\1/", u)          # git@host:owner/repo -> host/owner/repo
+    u = re.sub(r"^[a-z]+://", "", u)                  # drop scheme
+    u = re.sub(r"^[^@/]+@", "", u)                    # drop userinfo
+    return u
+
+
+def _origin_matches(clone_dir, repo):
+    origin = _git("remote", "get-url", "origin", cwd=clone_dir).stdout.strip()
+    return _norm_repo(origin) == _norm_repo(repo), origin
+
+
 def cmd_lock(a):
     print(json.dumps(read_lock(), indent=2))
     return 0
 
 
 def _local_recon(a, lock):
+    """Which recon.sh the workflow will actually run — that is the one to check.
+    Explicit --local wins; else the clone named by --dir (so a stale clone is caught);
+    else the bundled mirror."""
     if a.local:
-        return a.local
-    cand = os.path.join(HERE, "recon.sh")
-    return cand if os.path.exists(cand) else None
+        return a.local, "explicit"
+    if a.dir:
+        cand = os.path.join(a.dir, "recon.sh")
+        if os.path.exists(cand):
+            return cand, "clone"
+    bundled = os.path.join(HERE, "recon.sh")
+    return (bundled, "bundled") if os.path.exists(bundled) else (None, "bundled")
 
 
 def cmd_status(a):
     lock = read_lock()
-    local = _local_recon(a, lock)
-    out = {"canonical_repo": lock.get("repo"), "local_recon_sh": local}
+    local, kind = _local_recon(a, lock)
+    out = {"canonical_repo": lock.get("repo"), "local_recon_sh": local, "checking": kind}
     if not local or not os.path.exists(local):
         out.update(state="missing",
                    action=f"clone it: python3 -I recon_sync.py ensure --dir <dir>  "
@@ -106,18 +129,27 @@ def cmd_status(a):
         print(json.dumps(out, indent=2))
         return 0
 
-    # The lock records the sha synced from the canonical repo; a local edit that drifts
-    # from it is flagged even before any network check.
+    # The lock records the sha of the VENDORED mirror; a local edit that drifts from it is
+    # flagged even before any network check. This only applies to the bundled copy — a
+    # separate clone (kind == "clone") legitimately differs and is checked against the
+    # repo below instead.
     locked_sha = lock.get("recon_sh_sha256")
-    if locked_sha and locked_sha != local_sha:
+    if kind == "bundled" and locked_sha and locked_sha != local_sha:
         out.update(state="drifted-from-lock", locked_sha256=locked_sha,
-                   action="local recon.sh differs from the vendored lock; re-sync with "
+                   action="bundled recon.sh differs from the vendored lock; re-sync with "
                           "`ensure` or restore the vendored copy")
         print(json.dumps(out, indent=2))
         return 0
 
     # Online path: ask the canonical repo for its current recon.sh and compare.
     if a.dir and os.path.isdir(os.path.join(a.dir, ".git")) and _have_git():
+        matches, origin = _origin_matches(a.dir, lock.get("repo", DEFAULT_REPO))
+        if not matches:
+            out.update(state="wrong-origin", clone_origin=origin,
+                       action=f"{a.dir} is a clone of '{origin}', not the canonical repo; "
+                              f"do not run its scripts. Use a fresh --dir.")
+            print(json.dumps(out, indent=2))
+            return 0
         fetch = _git("fetch", "--depth", "1", "origin", lock.get("branch", "HEAD"),
                      cwd=a.dir)
         if fetch.returncode == 0:
@@ -153,6 +185,17 @@ def cmd_ensure(a):
         return 1
     d = a.dir
     if os.path.isdir(os.path.join(d, ".git")):
+        # Guard: never pull from, or hand script paths out of, a checkout that is NOT the
+        # canonical repo — otherwise the documented next step could run setup.sh (sudo)
+        # from an unrelated/attacker-controlled repo.
+        origin = _git("remote", "get-url", "origin", cwd=d).stdout.strip()
+        if _norm_repo(origin) != _norm_repo(repo):
+            print(json.dumps({"state": "wrong-origin",
+                              "action": f"{d} is a clone of '{origin}', not the canonical "
+                                        f"'{repo}'. Refusing to update or return script paths. "
+                                        f"Use a fresh --dir, or clone the canonical repo there."},
+                             indent=2), file=sys.stderr)
+            return 1
         pull = _git("pull", "--ff-only", cwd=d)
         ok = pull.returncode == 0
         action = "pulled" if ok else f"pull failed: {pull.stderr.strip()[:160]}"

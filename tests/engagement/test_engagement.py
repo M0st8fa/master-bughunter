@@ -367,6 +367,59 @@ def t_reclassify_on_scope_change():
         shutil.rmtree(ws, ignore_errors=True)
 
 
+# 6c — HTTP basic-auth userinfo (user:pass@) is stripped before a URL is persisted
+def t_userinfo_stripped_from_url():
+    red = ing.redact_url("https://admin:hunter2@app.acme.com/panel?a=1")
+    check("6c-userinfo-stripped", "admin" not in red and "hunter2" not in red
+          and "app.acme.com/panel" in red, red)
+    # userinfo stripped even when there is no query string
+    red2 = ing.redact_url("http://u:p@acme.io/x")
+    check("6c-userinfo-stripped-no-query", "u:p@" not in red2 and "acme.io/x" in red2, red2)
+    # a clean URL is returned byte-for-byte unchanged
+    clean = "https://acme.io/a?b=c"
+    check("6c-clean-url-unchanged", ing.redact_url(clean) == clean, ing.redact_url(clean))
+
+
+# 3c — manifest present but scope emptied: in-scope rows become needs_clarification,
+# and nothing is scheduled (the scheduler must stop offering them)
+def t_empty_scope_reclassifies():
+    ws = new_ws()
+    try:
+        make_engagement(ws)
+        ing.ingest(FIXTURE, ws)
+        inv = ing.load_jsonl(os.path.join(ws, "inventory.jsonl"))
+        check("3c-precondition-in-scope", any(r["scope"] == "in_scope" for r in inv.values()))
+        m = eng.load(ws)
+        m["scope"]["in_scope_roots"] = []
+        eng.save(ws, m)
+        ing.ingest(FIXTURE, ws)
+        inv2 = ing.load_jsonl(os.path.join(ws, "inventory.jsonl"))
+        scopes = {r["scope"] for r in inv2.values()}
+        check("3c-no-in-scope-after-empty", "in_scope" not in scopes, str(scopes))
+        check("3c-rows-need-clarification", scopes <= {"needs_clarification"}, str(scopes))
+        _, total = ing.next_batch(ws, 100)
+        check("3c-nothing-scheduled", total == 0, f"total={total}")
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+
+
+# 10b — a reclassification that merges onto a duplicate key preserves a completed status
+def t_reclassify_merge_preserves_done():
+    def row(host, scope, status):
+        return {"key": "K", "url": f"https://{host}/x", "method": "GET", "host": host,
+                "path": "/x", "params": [], "scope": scope, "status_code": "", "tech": "",
+                "sources": ["s"], "route": [], "test_status": status,
+                "checks_done": [], "evidence": [], "findings": []}
+    # inventory holds K=done (prior in-scope run); excluded holds the SAME key.
+    inventory = {"K": row("app.acme.com", "in_scope", "done")}
+    excluded = {"K": row("app.acme.com", "out_of_scope", "excluded")}
+    # scope now includes the host -> the excluded copy flips back in-scope and merges
+    ing._reclassify(inventory, excluded, ["*.acme.com"], [], has_manifest=True)
+    check("10b-merge-collapses-key", "K" in inventory and "K" not in excluded)
+    check("10b-merge-preserves-done", inventory["K"]["test_status"] == "done",
+          inventory["K"]["test_status"])
+
+
 def main():
     for fn in [t_established_once, t_no_repeated_gate, t_new_engagement_separate,
                t_exclusions_enforced, t_recon_sh_real_flags, t_import_without_rerun,
@@ -374,7 +427,8 @@ def main():
                t_all_scheduled_and_tracked, t_resume_preserves_findings,
                t_tool_failures_not_coverage, t_no_secrets_in_state,
                t_logname_files_not_dropped, t_url_credentials_redacted,
-               t_reclassify_on_scope_change]:
+               t_reclassify_on_scope_change, t_userinfo_stripped_from_url,
+               t_empty_scope_reclassifies, t_reclassify_merge_preserves_done]:
         try:
             fn()
         except Exception as e:  # noqa: BLE001

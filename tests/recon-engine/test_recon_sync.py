@@ -78,18 +78,53 @@ def t_status_missing_local():
     check("status-missing", rc == 0 and out.get("state") == "missing", str(out))
 
 
-def t_status_drift_from_lock():
-    # a local recon.sh that differs from the vendored lock sha is flagged as drift
+def t_status_drift_from_lock_bundled_only():
+    # Drift-from-lock applies to the BUNDLED copy only: a hand-edited bundle is flagged,
+    # while a separate --local/clone that differs is NOT (it is checked vs the repo).
+    backup = BUNDLED + ".bak"
+    shutil.copy(BUNDLED, backup)
+    try:
+        with open(BUNDLED, "a") as f:
+            f.write("\n# locally appended, drifts from the vendored lock\n")
+        rc, out = run("status")   # no --local/--dir -> checks the bundled copy
+        check("status-drifted-bundled", rc == 0 and out.get("state") == "drifted-from-lock"
+              and out.get("checking") == "bundled", str(out))
+    finally:
+        shutil.move(backup, BUNDLED)
+    # an explicit non-bundled script that differs is not mislabeled as drift
     tmp = tempfile.mkdtemp()
     try:
         local = os.path.join(tmp, "recon.sh")
         with open(local, "w") as f:
-            f.write("#!/usr/bin/env bash\n# locally edited, no longer matches the lock\n")
+            f.write("#!/usr/bin/env bash\n# a different standalone script\n")
         rc, out = run("status", "--local", local)
-        check("status-drifted-from-lock", rc == 0 and out.get("state") == "drifted-from-lock",
+        check("status-explicit-not-drift", rc == 0 and out.get("state") != "drifted-from-lock",
               str(out))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def t_local_recon_prefers_clone_dir():
+    # with --dir, the freshness check targets the clone's recon.sh, not the bundled copy
+    tmp = tempfile.mkdtemp()
+    try:
+        clone = os.path.join(tmp, "recon.sh")
+        with open(clone, "w") as f:
+            f.write("#!/usr/bin/env bash\n# clone copy\n")
+        rc, out = run("status", "--dir", tmp)   # tmp has no .git -> falls to lock-marker path
+        check("local-recon-prefers-clone",
+              out.get("checking") == "clone" and out.get("local_recon_sh") == clone, str(out))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def t_norm_repo_equivalence():
+    same = rs._norm_repo("https://github.com/M0st8fa/Recon-Script.git") == \
+        rs._norm_repo("git@github.com:m0st8fa/recon-script") == \
+        rs._norm_repo("https://github.com/M0st8fa/Recon-Script/")
+    diff = rs._norm_repo("https://github.com/evil/Recon-Script") != \
+        rs._norm_repo("https://github.com/M0st8fa/Recon-Script")
+    check("norm-repo-equiv", same and diff)
 
 
 def t_bundled_matches_lock():
@@ -103,7 +138,8 @@ def t_bundled_matches_lock():
 def main():
     for fn in [t_lock_points_at_canonical_repo, t_status_up_to_date_vs_identical_reference,
                t_status_stale_vs_different_reference, t_status_missing_local,
-               t_status_drift_from_lock, t_bundled_matches_lock]:
+               t_status_drift_from_lock_bundled_only, t_local_recon_prefers_clone_dir,
+               t_norm_repo_equivalence, t_bundled_matches_lock]:
         try:
             fn()
         except Exception as e:  # noqa: BLE001
