@@ -5,6 +5,90 @@ Format: reverse-chronological. Dates are absolute (YYYY-MM-DD).
 
 ## [Unreleased]
 
+### 2026-10-23 — recon-engine: canonical Recon-Script source + pre-hunt freshness check
+- **Canonical source.** `recon.sh` and `setup.sh` are now vendored from the canonical repo
+  **`https://github.com/M0st8fa/Recon-Script`**, recorded in
+  `skills/recon-engine/scripts/recon-script.lock` (repo URL, synced commit, sha256 of each
+  script). The bundled copies were replaced with that repo's current versions (commit
+  `4e10781`); they are a mirror, not hand-edited.
+- **Pre-hunt freshness check.** New `scripts/recon_sync.py` (stdlib): `status` reports
+  `up_to_date` / `stale` / `missing` / `drifted-from-lock` / `unknown-network` by comparing
+  the local `recon.sh` against the canonical repo (git fetch, an offline `--reference`
+  file, or the lock sha); `ensure` clones or `git pull --ff-only`s the repo; `lock` prints
+  the lock. It treats the repo as **untrusted data** — clones/compares text only and
+  **never executes** `recon.sh`/`setup.sh` (that stays the explicit, trusted-host step).
+- **Wired into the workflow.** `recon-engine` SKILL.md + `references/active-enumeration.md`
+  (new "Canonical source & freshness" section + a `stale` row in the execution decision
+  table), the `engagement` skill (recon branch), and `bb-pipeline` Phase 1 now run the
+  freshness check before a fresh active run and install the toolchain from the canonical
+  `setup.sh` when tools are missing.
+- **Notifications reconciled to the canonical script.** The canonical `recon.sh` has only
+  Slack/Discord webhooks, so the Telegram/per-finding-alert docs (a prior local-only
+  addition) were removed from `SKILL.md`, `active-enumeration.md`, `README.md`, and
+  `keys.env.example` so the documented invocation matches the actual script. Telegram can
+  be re-added upstream in Recon-Script and picked up on the next sync.
+- **Tests:** `tests/recon-engine/test_recon_sync.py` (8 checks, offline, no network/git) +
+  `scenarios.md` SYNC-1..3. Validator 33/33, 0 errors.
+
+### 2026-10-23 — Persistent authorization, autonomous hunting & recon-first workflow
+- **New `engagement` skill (orchestration-support)** — persistent engagement manifest
+  (`engagement.json`, schema `schemas/engagement.schema.json`). `scripts/engagement.py`
+  runs the authorization + scope gate **once per engagement**, persists program id, scope
+  source, in-scope roots, exclusions, rate limits, required headers (non-secret), testing
+  restrictions, posture, recon status, current phase, and completed work; `init` is
+  idempotent (reuse on resume, no re-gate), a different program is a conflict (fresh
+  workspace). Scope classifier (in/out/needs-clarification; exclusions beat inclusions;
+  wildcard-aware). A secret-shape guard **refuses** credentials/cookies/tokens so they
+  never enter persistent state. Commands: `init`, `show`, `classify`, `set`, `resume`.
+- **First-class recon-folder ingestion** — `scripts/ingest_recon.py` inventories a
+  supplied recon directory (recon.sh layout / BadRecon / ad-hoc), reads run config + logs
+  first (records per-tool ran/failed/skipped — a failed tool is missing evidence, never
+  coverage), extracts URLs from `.txt/.csv/.json/.jsonl`, builds a deduplicated
+  `inventory.jsonl` preserving method/param/endpoint variants with provenance, scope-splits
+  into a separate `excluded_inventory.jsonl` (never scheduled), routes each in-scope URL to
+  specialists by endpoint semantics, and tracks per-URL `test_status` for resume. A
+  `--next-batch` scheduler yields every distinct in-scope URL (no arbitrary cap).
+- **Stopped repeated authorization prompts (ecosystem-wide, boundaries intact).**
+  `security-hunt` Step 0 is now a one-time engagement gate (resume reuses it); added a
+  "stop re-asking" rule, a unified continuous workflow (setup→scope→recon|import→inventory
+  →intel→routing→validation→evidence→report→coverage), engagement-context pass-through to
+  specialists, and a tightened human-judgment gate list (destructive prod tests, material
+  scope ambiguity, program-prohibited actions, mass test-account creation, payment flows,
+  report submission). `bb-pipeline` loads/creates the manifest once, no longer asks to
+  advance each phase, added Phase 1b (import existing recon) and coverage review, and fixed
+  a hardcoded `C:/Users/Admin/...` bb-disclosures path. `docs/SAFETY.md` reworded
+  "specialists re-check it" → specialists **inherit** the established context (enforce
+  scope, don't re-interview) and listed the remaining approval gates.
+- **recon.sh is the standard active engine; execution is conditional, not forbidden.**
+  Replaced the blanket "this skill never executes recon.sh" claims in
+  `skills/recon-engine/SKILL.md` and `references/active-enumeration.md` with an execution
+  decision table: run it directly when a terminal + the script + toolchain are available;
+  otherwise report the **precise** blocker (no shell / script missing / toolchain missing)
+  and install or prepare the exact command — never silently fall back to `recon.py` for a
+  requested active run, never launch a duplicate over a running/existing job. Documented
+  invocation verified against the script's real `usage()` flags (no invented flags).
+- **Docs & index:** new `docs/ENGAGEMENT.md` (manifest format + resume + scope rules);
+  `SKILL_INDEX.md`/`README.md`/`docs/ARCHITECTURE.md` updated (33 skills; engagement data
+  contract). **Tests:** `tests/engagement/` — runnable `test_engagement.py` (28 checks
+  across the 12 required behaviors, mock fixtures, no live scan) + instruction-level
+  `scenarios.md`; new scenarios added to security-hunt/recon-engine/bb-pipeline.
+- **Boundaries preserved:** no scope enforcement removed, `docs/SAFETY.md` intact and
+  strengthened, validator/quality rules unchanged, no secrets in state/logs/reports.
+- **Review hardening (CodeRabbit pass):** secret guard now inspects dict **keys** (a
+  value under a sensitive key like `Authorization`/`Cookie` is refused even when shapeless)
+  and only exempts a value that is wholly a placeholder (a placeholder word inside a real
+  secret no longer disables it); engagement/inventory writes are **atomic** (`os.replace`)
+  so resume state survives a crash mid-write; `ingest_recon.py` now **redacts credential
+  query-params** (`token`, `access_token`, `sig`, …) before persisting a URL, matches
+  run-log/config files by whole filename/extension (so `login_urls.json`,
+  `blog_endpoints.jsonl`, `catalog.csv` are no longer silently dropped) and records
+  `files_skipped`, merges tool status by **severity** (a later `failed` is never hidden by
+  an earlier `ok`), and **reclassifies** stored inventory rows when scope/exclusions change
+  on re-ingest (a newly-excluded host leaves the hunt queue). `engagement.py set` validates
+  `--phase/--recon-status/--recon-engine` against the schema enums. Active-recon decision
+  table restricts `setup.sh` (sudo) to a trusted user-owned host. Tests: 38 checks (adds
+  real `init` reuse/conflict coverage, URL-redaction, log-filename, and reclassify cases).
+
 ### 2026-10-17 — recon-engine: Telegram notifications in recon.sh (run summary + per-finding alerts)
 - Added Telegram support to `scripts/recon.sh`, mirroring the existing Slack/Discord notify
   pattern. Config via `--telegram <bot_token>:<chat_id>` (split on the last colon, since bot

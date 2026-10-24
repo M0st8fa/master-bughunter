@@ -1,0 +1,3 @@
+url,method,status_code,tech
+https://app.acme.com/upload,POST,200,nginx
+https://app.acme.com/graphql,POST,200,apollo

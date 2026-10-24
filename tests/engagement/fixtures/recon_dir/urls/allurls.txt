@@ -1,0 +1,10 @@
+https://app.acme.com/
+https://app.acme.com/api/v1/users/123
+https://app.acme.com/api/v1/users/123?expand=orders
+https://app.acme.com/search?q=shoes
+https://app.acme.com/redirect?url=https://evil.com
+https://api.acme.io/v2/orders/9?id=9
+https://blog.acme.com/post/1
+https://cdn.vendor.com/lib.js
+not-a-url-line should be ignored
+https://app.acme.com/static/main.js

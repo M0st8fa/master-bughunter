@@ -12,3 +12,6 @@ __pycache__/
 # Local scratch
 *.log
 .DS_Store
+
+# Test fixtures (recon logs) are intentionally tracked
+!tests/engagement/fixtures/**

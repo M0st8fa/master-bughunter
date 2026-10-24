@@ -318,7 +318,7 @@ install_optional_tools() {
     install_go_tool "gowitness"    "github.com/sensepost/gowitness@latest"
 
     # Secrets
-    install_go_tool "gitleaks"     "github.com/zricethezav/gitleaks/v8@latest"
+    install_go_tool "gitleaks"     "github.com/gitleaks/gitleaks/v8@latest"
 
     # Extra PD tools
     install_go_tool "naabu"        "github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
@@ -341,8 +341,7 @@ install_optional_tools() {
     install_go_tool "puredns"      "github.com/d3mondev/puredns/v2@latest"
     install_go_tool "alterx"       "github.com/projectdiscovery/alterx/cmd/alterx@latest"
 
-    # Param discovery
-    install_go_tool "arjun"        "github.com/s0md3v/uro@latest"        # URL dedup
+    # Crawler (arjun is a Python tool — installed via pip in install_python_tools)
     install_go_tool "cariddi"      "github.com/edoardottt/cariddi/cmd/cariddi@latest"
 
     # Cloud
@@ -358,21 +357,35 @@ install_python_tools() {
     # Ensure pip is up to date
     python3 -m pip install --upgrade pip --quiet 2>>"$LOG_FILE" || true
 
+    # Format: "binary|install-spec". The spec defaults to the binary name, but
+    # paramspider is NOT published on PyPI (pip/pipx by name both fail with
+    # "No matching distribution found"), so it must be installed from its Git
+    # repo. Keeping the spec per-tool lets any other Git-only tool be added the
+    # same way.
     local pip_tools=(
-        "arjun"           # HTTP parameter discovery
-        "dnsgen"          # DNS wordlist generation
-        "uro"             # URL deduplication
-        "paramspider"     # Parameter spider
-        "waymore"         # More wayback + cc URLs
+        "arjun"                                                                   # HTTP parameter discovery
+        "dnsgen"                                                                  # DNS wordlist generation
+        "uro"                                                                     # URL deduplication
+        "paramspider|git+https://github.com/devanshbatham/ParamSpider.git"        # Parameter spider (Git only)
+        "waymore"                                                                 # More wayback + cc URLs
     )
 
-    for tool in "${pip_tools[@]}"; do
+    for entry in "${pip_tools[@]}"; do
+        local tool="${entry%%|*}"       # binary name
+        local spec="${entry#*|}"        # install spec (== tool when no pipe present)
+
+        if command -v "$tool" &>/dev/null; then
+            skip "$tool"
+            continue
+        fi
+
         info "pip: $tool..."
-        if python3 -m pip install "$tool" --quiet >> "$LOG_FILE" 2>&1; then
+        if python3 -m pip install "$spec" --quiet >> "$LOG_FILE" 2>&1; then
             ok "$tool (pip)"
         else
-            # Try pipx as fallback
-            if pipx install "$tool" >> "$LOG_FILE" 2>&1; then
+            # Try pipx as fallback (also the path on PEP-668 externally-managed
+            # systems like Ubuntu 23.04+ where system-wide pip is blocked).
+            if pipx install "$spec" >> "$LOG_FILE" 2>&1; then
                 ok "$tool (pipx)"
             else
                 fail "$tool (pip/pipx)"
@@ -721,6 +734,7 @@ verify_tools() {
         "naabu" "tlsx" "gf" "assetfinder" "httprobe"
         "subzy" "puredns" "alterx" "notify" "cdncheck"
         "hakrawler" "qsreplace" "cariddi" "cloudlist"
+        "amass" "arjun"
     )
 
     local all_ok=true

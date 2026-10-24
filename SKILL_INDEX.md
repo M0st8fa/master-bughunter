@@ -1,22 +1,23 @@
 # SKILL_INDEX.md — Catalog & Routing
 
-32 skills (1 orchestrator + 31 specialists) + 10 self-learning commands.
+33 skills (1 orchestrator + 1 orchestration-support + 31 specialists) + 10 self-learning commands.
 Status per `docs/QUALITY_RUBRIC.md`. 7 skills are `validated` (behavioral tests passed);
 the rest pass static validation (0 errors) and are `under-review` pending their behavioral
 sets. Scores filled in by `/skills-improve` and `/skills-test`. Last static run:
-2026-10-10 (32/32 pass, 0 errors).
+2026-10-23 (33/33 pass, 0 errors).
 
 ## Layer 1 — Orchestration
 | Skill | Status | Purpose |
 |---|---|---|
 | `security-hunt` | validated | Entry router: authorization/scope gate → classify → dispatch specialists → track findings → deliverables. |
+| `engagement` | under-review | Orchestration-support: persistent engagement manifest (one-time authorization+scope gate, `engagement.py`) + first-class recon-folder ingestion (`ingest_recon.py` — inventory, dedup preserving method/param/endpoint variants, scope split, specialist routing, resume). Schema `schemas/engagement.schema.json`; format `docs/ENGAGEMENT.md`. |
 
 ## Layer 2 — Specialists
 
 ### Recon & intelligence
 | Skill | Status | Purpose |
 |---|---|---|
-| `recon-engine` | validated | Two engines: passive brain `recon.py` (keyless, sandbox-safe — crt.sh, CT, Wayback, RDAP; VT/Shodan optional via env) + active muscle `recon.sh` (Go toolchain: subfinder/dnsx/katana/gospider/httpx + opt-in nuclei/gitleaks/arjun/naabu — runs on user's machine, not sandbox). Keys from env/`keys.env` (git-ignored); see `references/active-enumeration.md`. |
+| `recon-engine` | validated | Two engines: passive brain `recon.py` (keyless, sandbox-safe — crt.sh, CT, Wayback, RDAP; VT/Shodan optional via env) + active muscle `recon.sh` (Go toolchain: subfinder/dnsx/katana/gospider/httpx + opt-in nuclei/gitleaks/arjun/naabu — the standard engine for fresh active recon; execution conditional on a terminal + toolchain, see the decision table, never a silent passive-only fallback). Keys from env/`keys.env` (git-ignored); see `references/active-enumeration.md`. |
 | `badrecon` | under-review | Operate/triage a self-hosted multi-engine recon system's exports. |
 | `footprinting` | under-review | Tech-stack fingerprint → stack-specific known-bug attack plan. |
 | `target-intelligence` | under-review | Build a passive Target Intelligence Document before hunting. |

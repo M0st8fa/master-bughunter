@@ -7,12 +7,53 @@ authorized to test. The skill is the brain (scope, decisioning, triage, handoff)
 script is the muscle (enumeration).
 
 > **Runtime caveat — read first.** `recon.sh` is a Bash pipeline that shells out to
-> external tools (subfinder, dnsx, httpx, katana, …). It only works on a machine where
-> those tools are installed, and it must be run **by the user, on the user's own
-> machine**, against a target inside an authorized program's scope. It does **not** run
-> inside this project's sandbox, and this skill never executes it on the user's behalf.
-> Claude's job is to prepare scope, tell the user the exact command, and then interpret
-> the files the run produces.
+> external tools (subfinder, dnsx, httpx, katana, …). It does real work only on a machine
+> where those tools are installed, run against a target inside an authorized program's
+> scope. **Whether Claude executes it is conditional on the environment, not a blanket
+> no:** when a local terminal (the Bash/shell tool) is available **and** `recon.sh` is
+> present **and** its toolchain is installed, run it directly and then interpret the
+> output. When a prerequisite is missing, report the *precise* blocker and either install
+> the toolchain (`scripts/setup.sh`) or prepare the exact command for the user to run on
+> their own machine. Never silently substitute `recon.py` for a requested active run.
+
+### Execution decision table (run it, or report the exact blocker)
+
+| Condition | Action |
+|---|---|
+| Local `recon.sh` stale vs the canonical repo (`recon_sync.py status` = `stale`/`missing`) | `recon_sync.py ensure --dir <clone>` to fast-forward/clone, **before** running. `unknown-network` → proceed with the vendored copy and note the check was skipped. |
+| Shell available + `recon.sh` present + toolchain installed | **Run `recon.sh` directly** on the in-scope roots; hand the output dir to `ingest_recon.py`. |
+| Shell available + `recon.sh` present + toolchain missing, **on a trusted user-owned Ubuntu host** | Run `scripts/setup.sh` (Ubuntu, sudo) to install, then run `recon.sh`. |
+| Shell available + toolchain missing, **but not a trusted user-owned host** (any locked-down/shared/sandbox environment) | Do **not** run `setup.sh` (it needs sudo and writes system-wide). Report "toolchain missing" + the exact `setup.sh`/`recon.sh` commands for the user to run on their own machine. |
+| Shell available + `recon.sh` not found | Report "recon.sh not found at `<path>`"; locate it (`$PATH`, repo `scripts/`, `/root/recon.sh`) before constructing any command. |
+| No shell / locked-down sandbox | Report "no local terminal"; use `recon.py` for passive breadth and prepare the `recon.sh` command for the user's machine. Never run `setup.sh` here. |
+| A recon job is already running / output exists | Do **not** launch a duplicate; `--resume` or ingest the existing directory. |
+
+Inspect the actual script's `usage()` before building a command — never invent flags.
+`recon.sh` accepts `-d <domain>` / `-l <file>`, `-o <dir>`, `-v`, tuning (`-t -r -D -T -w
+-R`), `--skip-*`, opt-in `--nuclei --screenshots --gitleaks --params --ports
+--test-redirects --active-checks`, `--resume`, and `--slack/--discord`.
+
+## Canonical source & pre-hunt freshness check
+
+`recon.sh` and `setup.sh` are **vendored from a canonical upstream repo**, recorded in
+`scripts/recon-script.lock` (**`https://github.com/M0st8fa/Recon-Script`**). That repo is
+the source of truth; the copies under `scripts/` are a mirror. **Before any fresh active
+run, confirm the engine is up to date and install the toolchain if it's missing:**
+
+```bash
+# freshness: fetches + compares the canonical recon.sh, never executes anything
+python3 -I scripts/recon_sync.py status --dir <local_clone>
+#   → state: up_to_date | stale | missing | drifted-from-lock | unknown-network
+# update (clone if absent, else git pull --ff-only):
+python3 -I scripts/recon_sync.py ensure  --dir <local_clone>
+# then, only if the Go toolchain is missing, install from the canonical setup.sh:
+bash <local_clone>/setup.sh        # Ubuntu, sudo, trusted user-owned host only
+```
+
+`recon_sync.py` treats the repo as **untrusted data** — it clones/compares text and never
+runs `recon.sh`/`setup.sh`; executing them is the separate, explicit step below, gated by
+the decision table (trusted host only). If the freshness check can't reach the repo
+(`unknown-network`), proceed with the vendored copy and note that the check was skipped.
 
 ## When to use which engine
 
@@ -28,13 +69,14 @@ script is the muscle (enumeration).
 `recon.py` is **not** superseded — it is the passive/API-source layer and the only one
 that runs where no tools are installed. The two are complementary.
 
-## Install the toolchain first (`scripts/setup.sh`)
+## Install the toolchain first (`setup.sh`, from the canonical repo)
 
 `recon.sh` only works once the Go bug-bounty suite is installed. Before the first run,
-have the user run the bundled installer **on their own machine**:
+sync the canonical repo (above) and run **its** `setup.sh` on the user's own machine:
 
 ```bash
-bash scripts/setup.sh
+python3 -I scripts/recon_sync.py ensure --dir <local_clone>   # get the latest setup.sh
+bash <local_clone>/setup.sh                                   # trusted user-owned host
 ```
 
 `setup.sh` targets **Ubuntu 20.04 / 22.04 / 24.04** and needs **sudo**. It installs Go
@@ -77,36 +119,29 @@ bash recon.sh -d example.com --nuclei --screenshots --params --ports \
 
 Key flags: `-t` threads (50), `-r` httpx rate req/s (150), `-D` katana depth (3),
 `-T` timeout (10s), `-w` wordlist, `-R` resolvers, `--resume` resume a prior output dir,
-`--skip-*` to drop modules, `--slack`/`--discord <webhook>` or `--telegram` for
+`--skip-*` to drop modules, `--slack`/`--discord <webhook>` for
 notifications (see below). The
 opt-in modules (`--nuclei`, `--screenshots`, `--gitleaks`, `--params`, `--ports`,
 `--test-redirects`, `--active-checks`) are **off by default** — they send active traffic
 to the target, so only enable them inside program scope. Run `bash recon.sh -h` for the
 full option list.
 
-## Notifications (Slack / Discord / Telegram)
+## Notifications (Slack / Discord)
 
-`recon.sh` can push the end-of-run summary (subdomains / URLs / live / nuclei counts +
-output dir) to a channel, and — for **Telegram** — also fire a short alert the moment a
-high-signal finding is confirmed.
+The canonical `recon.sh` can push the end-of-run summary (subdomains / URLs / live /
+nuclei counts + output dir) to a channel:
 
-- **Slack / Discord:** `--slack <webhook>` / `--discord <webhook>` (summary only).
-- **Telegram:** `--telegram <bot_token>:<chat_id>` **or** export `TELEGRAM_BOT_TOKEN` and
-  `TELEGRAM_CHAT_ID` (env keeps the token out of shell history; the flag overrides env
-  when both are given). Because a bot token itself contains a `:`, the flag value is split
-  on its **last** colon. The token is a credential — pass it at runtime only, never commit
-  it. Telegram is **opt-in**: with nothing configured, all notify calls are silent no-ops.
-- **Per-finding Telegram alerts** fire on confirmed/high-signal findings only — zone
-  transfer, subdomain takeover (subzy), nuclei critical/high, confirmed open redirect,
-  CORS misconfig, exposed `.git`, public cloud bucket, and secrets found. Secret **values**
-  are never sent — only the finding type, affected host/URL, and counts/location.
+- **Slack / Discord:** `--slack <webhook>` / `--discord <webhook>` (summary only). Opt-in:
+  with no webhook configured, the notify calls are silent no-ops. The webhook is passed at
+  runtime only and never committed.
+
+> **Note.** Per-finding and Telegram alerts are **not** part of the canonical Recon-Script
+> repo, so they are not documented here. If you want them, add them upstream in
+> `M0st8fa/Recon-Script` and re-sync (`recon_sync.py ensure`) — the skill always tracks
+> whatever the canonical repo ships, rather than carrying a local fork of the script.
 
 ```bash
-# token out of shell history
-export TELEGRAM_BOT_TOKEN='123456789:AA...'; export TELEGRAM_CHAT_ID='123456789'
-bash recon.sh -d example.com --nuclei --active-checks
-# or inline
-bash recon.sh -d example.com --active-checks --telegram '123456789:AA...:123456789'
+bash <local_clone>/recon.sh -d example.com --active-checks --slack '<webhook-url>'
 ```
 
 ## Output layout (`$OUTPUT_DIR/`)

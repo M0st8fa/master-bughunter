@@ -1,0 +1,3 @@
+{"url":"https://app.acme.com/api/v1/users/123","method":"GET","status_code":200,"tech":["nginx","React"]}
+{"url":"https://app.acme.com/api/v1/users/123","method":"POST","status_code":405,"tech":["nginx"]}
+{"url":"https://app.acme.com/login","method":"GET","status_code":200,"webserver":"nginx"}

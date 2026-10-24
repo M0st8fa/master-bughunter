@@ -21,28 +21,31 @@ system scores and validates every skill; and a human-approved, file-based improv
 lets the library get better over time without ever auto-applying changes to a target or to
 itself.
 
-- **32 skills** — 1 orchestrator (`security-hunt`) + 31 specialists (recon &
-  intelligence, per-bug-class hunters, API/cloud/detection, pipeline & calibration,
+- **33 skills** — 1 orchestrator (`security-hunt`) + the `engagement` support skill
+  (persistent authorization/scope state + recon-folder ingestion) + 31 specialists (recon
+  & intelligence, per-bug-class hunters, API/cloud/detection, pipeline & calibration,
   reporting). Full catalog: [`SKILL_INDEX.md`](SKILL_INDEX.md).
 - **10 self-learning commands** (`/skills-*`) — a controlled, human-approved
   Observe → Verify → Propose → Test → Approve → Update loop.
 - **Quality system** — a 12-category rubric ([`docs/QUALITY_RUBRIC.md`](docs/QUALITY_RUBRIC.md)),
   a stdlib-only static validator ([`scripts/validate_skills.py`](scripts/validate_skills.py),
-  currently **32/32 pass, 0 errors**), and JSON schemas ([`schemas/`](schemas/)).
+  currently **33/33 pass, 0 errors**), and JSON schemas ([`schemas/`](schemas/)).
 - **Persistent ledgers** — `SOURCES.md`, `CHANGELOG.md`, `RESEARCH_LOG.md`,
   `LEARNING_LOG.md`, `COVERAGE.md`, `TEST_RESULTS.md`, `IMPROVEMENT_QUEUE.md`.
 
 ## Skill index
 
-Start with **`security-hunt`** — it confirms authorization and scope, then routes to the
-right specialist. Status is `validated` (behavioral tests passed) or `under-review` (passes
+Start with **`security-hunt`** — it establishes authorization and scope **once** (persisted
+by the `engagement` skill), then routes to the right specialist and runs continuously
+without re-asking at each step. Status is `validated` (behavioral tests passed) or `under-review` (passes
 static validation, behavioral set pending). Full table in [`SKILL_INDEX.md`](SKILL_INDEX.md).
 
 **Orchestration**
-- `security-hunt` — entry router: authorization/scope gate → classify → dispatch → track findings → deliverables.
+- `security-hunt` — entry router: one-time authorization/scope gate → classify → dispatch → track findings → deliverables.
+- `engagement` — persistent engagement manifest (establish authorization once, resume without re-gating) + first-class recon-folder ingestion (dedup master URL inventory, scope split, specialist routing, resume). See [`docs/ENGAGEMENT.md`](docs/ENGAGEMENT.md).
 
 **Recon & intelligence**
-- `recon-engine` — passive brain (`recon.py`, keyless/sandbox-safe) + active muscle (`recon.sh`, Go toolchain, runs on your machine) · `badrecon` · `footprinting` · `target-intelligence` · `js-recon` · `js-audit` · `signup-agent` (authorized account creation for testing).
+- `recon-engine` — passive brain (`recon.py`, keyless/sandbox-safe) + active muscle (`recon.sh`, Go toolchain — the standard engine for fresh active recon, run wherever a terminal + toolchain are available) · `badrecon` · `footprinting` · `target-intelligence` · `js-recon` · `js-audit` · `signup-agent` (authorized account creation for testing).
 
 **Vulnerability hunters (bug class → skill)**
 - `bb-authz` (access control / IDOR / BOLA / privesc) · `idor-runner` · `bb-xss` · `bb-domxss` · `bb-sqli` · `bb-ssrf` · `bb-csrf` · `bb-rce` · `bb-bizlogic` · `bb-race` · `bb-upload` · `bb-oauth` · `bb-graphql` · `bb-pii`.
@@ -81,11 +84,17 @@ skill documents its own needs.
 ### Optional: active recon toolchain (for `recon-engine`'s `recon.sh`)
 
 The `recon-engine` skill has two engines: a passive `recon.py` (stdlib, no tools, runs
-anywhere) and an active `recon.sh` that drives the Go bug-bounty toolchain. To use the
-**active** engine, install the toolchain **first** with the bundled setup script:
+anywhere) and an active `recon.sh` that drives the Go bug-bounty toolchain. `recon.sh` and
+`setup.sh` are **vendored from the canonical repo
+[`M0st8fa/Recon-Script`](https://github.com/M0st8fa/Recon-Script)** (tracked in
+`skills/recon-engine/scripts/recon-script.lock`). Before an active run, check they're up
+to date and install the toolchain **first**:
 
 ```sh
-bash skills/recon-engine/scripts/setup.sh
+# freshness check + update from the canonical repo (never executes the scripts)
+python3 -I skills/recon-engine/scripts/recon_sync.py status --dir <local_clone>
+python3 -I skills/recon-engine/scripts/recon_sync.py ensure --dir <local_clone>
+bash <local_clone>/setup.sh                 # install the toolchain (trusted host)
 ```
 
 > ⚠️ **Ubuntu 20.04 / 22.04 / 24.04 only**, and it needs **sudo**. It installs a large
@@ -96,19 +105,14 @@ bash skills/recon-engine/scripts/setup.sh
 > Subfinder API keys are **optional** (empty placeholders are written to
 > `~/.config/subfinder/provider-config.yaml`) — add them for broader subdomain coverage.
 
-**Notifications (optional).** `recon.sh` can push the end-of-run summary to Slack, Discord
-or Telegram, and when **Telegram** is configured it also sends a concise alert on each
-confirmed high-signal finding (zone transfer, subdomain takeover, nuclei critical/high,
-open redirect, CORS misconfig, exposed `.git`, public cloud bucket, secrets). Enable
-Telegram with `--telegram <bot_token>:<chat_id>` or by exporting `TELEGRAM_BOT_TOKEN` and
-`TELEGRAM_CHAT_ID` (env keeps the token out of shell history). The bot token is a
-credential — it is read at runtime only and never committed; secret *values* are never
-sent, only finding type/location. It's opt-in: with nothing set, notifications are silent
-no-ops.
+**Notifications (optional).** The canonical `recon.sh` can push the end-of-run summary to
+**Slack or Discord** (`--slack`/`--discord <webhook>`). Opt-in: with no webhook set, the
+notify calls are silent no-ops, and the webhook is read at runtime only, never committed.
+(Telegram/per-finding alerts aren't part of the canonical Recon-Script repo; add them
+upstream and re-sync if you want them.)
 
 ```sh
-export TELEGRAM_BOT_TOKEN='123456789:AA...'; export TELEGRAM_CHAT_ID='123456789'
-bash skills/recon-engine/scripts/recon.sh -d example.com --nuclei --active-checks
+bash <local_clone>/recon.sh -d example.com --nuclei --active-checks --slack '<webhook>'
 ```
 
 **Optional recon keys:** `recon-engine` can use VirusTotal/Shodan if keys are present via
@@ -150,7 +154,7 @@ Drive the improvement loop with the `/skills-*` commands:
 
 ```
 master-bughunter/
-├─ skills/        32 skills (each a dir: SKILL.md + optional references/scripts/assets)
+├─ skills/        33 skills (each a dir: SKILL.md + optional references/scripts/assets)
 ├─ commands/      /skills-* self-learning command catalog (.md)
 ├─ references/    shared knowledge (deduped)
 ├─ scripts/       validate_skills.py and utilities
