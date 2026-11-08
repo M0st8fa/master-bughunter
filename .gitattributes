@@ -1,0 +1,13 @@
+# Force LF in the repository and in every working tree, regardless of core.autocrlf.
+# Rationale: the vendored recon.sh/setup.sh are hashed byte-for-byte by
+# recon-engine/scripts/recon_sync.py against recon-script.lock, and are executed by
+# bash (WSL/Git Bash) — CRLF checkouts broke both the freshness check and the scripts
+# themselves. Keep executable/data formats LF; text prose can stay auto.
+*.sh          text eol=lf
+*.py          text eol=lf
+*.lock        text eol=lf
+*.json        text eol=lf
+*.jsonl       text eol=lf
+*.csv         text eol=lf
+*.env.example text eol=lf
+*.md          text eol=lf
