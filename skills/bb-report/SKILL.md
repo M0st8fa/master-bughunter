@@ -20,6 +20,7 @@ Target / program / researcher-session header. Scope-respected statement.
 - Impact: concrete attacker outcome, chained if possible.
 - Remediation: one actionable fix.
 - CVSS: vector + score. Severity classes: Low, Medium, High, Critical; "Info/low — likely informative" for borderline.
+- VRT (Bugcrowd programs): `VRT: <full taxonomy path> [P1..P5]` — classify to the deepest variant per the VRT map (`references/vrt-mapping.md`); entries with no default priority need an impact justification; always check the program's VRT overrides on the brief first.
 - Precedent: nearest paid equivalent from bb-disclosures (pattern + $) — proves the class pays and shows what your variant still lacks.
 - Evidence: file paths under recon/.
 
@@ -44,6 +45,18 @@ audit.log + evidence file index.
 - **Impact over mechanism**: "can read any customer's address" beats "server returns 200"; state the attacker's outcome and the chain.
 - Group Low/Informative findings together; don't inflate severity to feel productive — but DO run bb-chains first before parking anything as informational.
 - Confidentiality: report contents stay private until the program discloses; no YouTube/blog PoCs without written consent (standard Intigriti term).
+
+## VRT classification (Bugcrowd programs)
+
+Classify EVERY finding with the Bugcrowd Vulnerability Rating Taxonomy before assigning
+severity — full map, reward-priority tables, and the P5 auto-reject list live in
+`references/vrt-mapping.md` (official snapshot of bugcrowd.com/vulnerability-rating-taxonomy).
+Rules: deepest matching variant; `VRT: <category > subcategory > variant> [P1..P5]` line in
+every finding; P5-baseline entries are never submitted without a proven chain (bb-chains
+makes them conditionally valid); no-default-priority entries get an explicit impact
+justification; the program's own VRT overrides on the brief always win over the public baseline.
+Use the map's §3 P1/P2 tables to PRIORITIZE hunting — on Bugcrowd programs, weight effort
+toward classes with VRT P1/P2 reward bands present in the attack surface.
 
 ## CVSS quick anchors
 - Own-account-only IDOR with PII access: High 7–8 (AV:N/AC:L/PR:L/UI:N).

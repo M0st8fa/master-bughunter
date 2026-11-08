@@ -1,6 +1,6 @@
 ---
 name: bb-chains
-description: Escalate and chain bug bounty findings to full impact, run the 8-question validation gate before reporting, calibrate against real paid disclosures, and kill weak findings fast with the always-rejected list. Use whenever the user says "escalate this", "chain it", "is this worth reporting", "this is only P4, make it bigger", "full impact", has a weak finding to strengthen, or is deciding whether to submit.
+description: Escalate and chain bug bounty findings to full impact, run the validation gate (9-question) before reporting, calibrate against real paid disclosures, and kill weak findings fast with the always-rejected list. Use whenever the user says "escalate this", "chain it", "is this worth reporting", "this is only P4, make it bigger", "full impact", has a weak finding to strengthen, or is deciding whether to submit.
 ---
 
 # Chains, Escalation & The Validation Gate
@@ -28,7 +28,7 @@ A finding's bounty is set by the END of the chain, not the start. Two jobs here:
 
 Escalation discipline: each hop must be demonstrated, not assumed. "XSS could steal cookies" requires the cookie actually being non-HttpOnly.
 
-## The 8-question gate (ALL yes, or don't report)
+## The 9-question gate (ALL yes, or don't report)
 
 1. Working PoC I can run right now?
 2. Affects a real user who did nothing unusual?
@@ -38,9 +38,11 @@ Escalation discipline: each hop must be demonstrated, not assumed. "XSS could st
 6. Not on the always-rejected list (below)?
 7. Would a tired triager on Friday 5pm say "yes, real bug"?
 8. **Precedent check**: does a similar bug appear in the bb-disclosures corpus with a real payout (`query.py --q "<pattern>" --min-bounty 500`)? If yes — does yours have the element that carried theirs (interaction-free, mass-scale, credentials-with-reach, control-plane state change)? If no — treat as P4 until chained.
+9. **VRT check (Bugcrowd programs)**: classify against the bb-report VRT map — P5-baseline entries are auto-rejects unless the chain is proven; no-default-priority entries need the impact justification written before submission.
 
 ## Always-rejected (never submit without a chain)
 Missing CSP/HSTS/headers, SPF/DKARC/DMARC, GraphQL introspection alone, version disclosure without a working exploit, clickjacking on non-sensitive pages, CSV injection, CORS wildcard without credentialed exfil, logout CSRF, self-XSS, open redirect alone, SSRF DNS-pingback only, rate-limit absence on non-critical forms, cookie flags alone, internal IP disclosure alone, mixed content, weak TLS ciphers, username/email enumeration, verbose errors without sensitive data, exposed login page of an internal tool with anonymous auth verified disabled.
+(On Bugcrowd programs this list is the human-readable mirror of the VRT P5 entries — see the bb-report VRT map for the exact taxonomy strings and the P1/P2 reward bands worth chaining toward.)
 
 ## Conditionally valid (only WITH the chain proven)
 open redirect→OAuth theft; CORS→credentialed exfil; no-rate-limit→OTP brute; SSRF-DNS→internal proof; host-header→reset poisoning; self-XSS→login-CSRF delivery; internal-IP disclosure→used as SSRF/IDOR enabler; control-plane UI→CSRF or credentialed action.

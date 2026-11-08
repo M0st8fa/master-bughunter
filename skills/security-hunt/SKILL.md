@@ -129,7 +129,9 @@ while eligible work remains or a tool failure left a gap.
 ## Step 5 — Deliverables
 
 Route to `bb-report`/`vuln-report` for write-ups. Calibrate severity against real
-precedent via `bb-disclosures` / `h1-reports` before submitting. Produce consistent
+precedent via `bb-disclosures` / `h1-reports` before submitting; on Bugcrowd programs also
+classify each finding with the Bugcrowd VRT (bb-report's VRT map) and let its P1/P2 reward
+bands steer which bug classes to hunt next. Produce consistent
 structured output; protect sensitive data (no cookies, tokens, or third-party PII in
 reports or logs).
 

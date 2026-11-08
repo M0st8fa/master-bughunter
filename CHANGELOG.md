@@ -5,6 +5,28 @@ Format: reverse-chronological. Dates are absolute (YYYY-MM-DD).
 
 ## [Unreleased]
 
+### 2026-11-08 — Bugcrowd VRT integration (report classification + reward-prioritized hunting)
+- **New `bb-report/references/vrt-mapping.md`** — official Bugcrowd Vulnerability Rating
+  Taxonomy snapshot (release 2026-07-08, from
+  `bugcrowd/vulnerability-rating-taxonomy`), distilled to the web-focused reward surface:
+  priority semantics (P1–P5 + no-default entries + program overrides), a classify-a-finding
+  procedure with the exact `VRT: <path> [Pn]` report format, **P1/P2 reward-band tables
+  mapped to the hunting skills** (used to prioritize which classes to hunt), the
+  tactic-shaping priority deltas (IDOR iterable [1] vs GUID [4], stored [2] vs reflected [3]
+  XSS, SSRF DNS-only [5] vs internal-secrets [2], open-redirect GET [4] vs other [5]), and
+  the full P5/auto-reject entry list.
+- **Wired in (minimal pointers, no duplication):** `bb-report` (VRT line in the report
+  skeleton + classification section), `vuln-report` (VRT line under CVSS + skeleton), `bb-chains`
+  (gate question 9 — VRT check; gate renamed 8→9-question consistently in SKILL.md,
+  SKILL_INDEX, and `tests/bb-chains/scenarios.md`; always-rejected list noted as the VRT-P5
+  mirror), `bb-pipeline` Phase 6 and `security-hunt` Step 5 (classify with VRT; steer
+  hunting by P1/P2 reward bands).
+- **Schema:** `schemas/finding.schema.json` gains an optional `vrt` string field
+  (Bugcrowd programs).
+- Per the repo's IQ-002 portability ruling the VRT map lives inside `bb-report` (self-contained
+  when the skill is copied alone); sibling skills reference the skill, not the file path.
+- **Tests:** validator re-run (33/33, 0 errors); engagement suite re-run (47/47 pass).
+
 ### 2026-10-23 — recon-engine: canonical Recon-Script source + pre-hunt freshness check
 - **Canonical source.** `recon.sh` and `setup.sh` are now vendored from the canonical repo
   **`https://github.com/M0st8fa/Recon-Script`**, recorded in

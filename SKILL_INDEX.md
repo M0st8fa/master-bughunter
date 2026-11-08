@@ -54,7 +54,7 @@ sets. Scores filled in by `/skills-improve` and `/skills-test`. Last static run:
 | Skill | Status | Purpose |
 |---|---|---|
 | `bb-pipeline` | under-review | Full authorized-hunt pipeline orchestration. |
-| `bb-chains` | validated | Escalation/chaining + 8-question validation gate. |
+| `bb-chains` | validated | Escalation/chaining + validation gate (9-question). |
 | `bb-disclosures` | under-review | 11,338-record paid-disclosure corpus + query engine. |
 | `h1-reports` | under-review | 14,878 HackerOne reports; program-specific payout calibration. |
 | `h1-playbooks` | under-review | Top-paid attack-pattern playbooks per class. |

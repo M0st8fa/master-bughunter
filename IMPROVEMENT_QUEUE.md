@@ -15,6 +15,7 @@ Priority: P0 (safety/correctness) · P1 (high value) · P2 · P3.
 | IQ-004 | P1 | **applied** | commands/ | Added `/skills-*` self-learning catalog (10 commands) | Core requirement, absent in archive | 2026-10-10 |
 | IQ-005 | P2 | **partially applied** | (new) api/cloud/detection + (planned) container/network | Fill coverage gaps | COVERAGE.md gap analysis — api-security, cloud-security, detection-engineering built & validated; container-k8s, network-service, source-review, sast-dast still planned | 2026-10-10 |
 | IQ-006 | P2 | proposed | all archive skills | Normalize to quality rubric sections | Uneven structure across 28 skills | 2026-10-10 |
+| IQ-007 | P1 | **applied** | bb-report (+vuln-report, bb-chains, bb-pipeline, security-hunt, finding.schema) | Bugcrowd VRT integration: `bb-report/references/vrt-mapping.md` (official snapshot 2026-07-08) + VRT line in report formats + gate question 9 + P1/P2 reward-band hunting priorities + optional `vrt` finding field | User-approved 2026-11-08; mission requires VRT alongside CVSS | 2026-11-08 |
 
 ## Notes
 - IQ-001 and IQ-003/004 are being actioned in Batch 1 (will move to `applied` in

@@ -75,6 +75,7 @@ For each finding, try to chain to full impact (IDOR → PII exfil on own account
 
 ### Phase 6 — Report
 Use the **bb-report** skill. One `recon/findings/report.md`: every bug with Title/Summary/PoC/Impact/Remediation/CVSS, a TESTED-NEGATIVE section, and the artifact index. Update it incrementally every session, not at the end.
+On Bugcrowd programs, classify every finding with the VRT (`VRT: <path> [P1..P5]` — bb-report's VRT map) and use its P1/P2 reward tables to prioritize which classes to hunt next on this target.
 
 ## Bug-class routing (use the matching skill per surface)
 

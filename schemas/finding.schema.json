@@ -18,6 +18,7 @@
     "cwe": { "type": "string", "pattern": "^CWE-[0-9]+$" },
     "severity": { "type": "string", "enum": ["info","low","medium","high","critical"] },
     "cvss": { "type": "string", "description": "CVSS vector or base score, optional." },
+    "vrt": { "type": "string", "description": "Bugcrowd VRT classification: 'Category > Subcategory > Variant [P1..P5]', deepest matching variant per skills/bb-report/references/vrt-mapping.md. Optional; expected on Bugcrowd programs." },
     "status": {
       "type": "string",
       "enum": ["hypothesis","reproduced","validated","reported","resolved","false-positive"],

@@ -32,6 +32,7 @@ No section may be skipped, renamed, or reordered. If information does not fit on
 ## Mandatory per-report extras (outside the 5 sections)
 
 - **CVSS 3.1 vector + score on every finding** — put it directly under the Title. Pair it with an honest calibration line: if realistic triage will land lower than the vector (link-possession required, blind primitive, bounded window), say so and name the realistic band. One calibrated sentence beats an inflated vector the triager knocks down.
+- **VRT line on Bugcrowd programs** — `VRT: <category > subcategory > variant> [P1..P5]` directly under the CVSS line, classified to the deepest variant per the bb-report VRT map (`bb-report/references/vrt-mapping.md`). Check the program's VRT overrides on the brief; P5-baseline entries are not submitted without a proven chain.
 - **Evidence appendix when the finding spans multiple artifacts** — a table of every verified URL/object with its verified state (e.g. receipt-downloaded vs state-classified). State exactly what was executed vs classified; never let scale claims rest on more than was done.
 - **Tested-negative registry** — for engagement-level reports: every rejected lead with the server's own response as proof. Demonstrates diligence and prevents re-testing.
 - **Testing-hygiene note** — one line: request count, data retained/discarded, identifiers redacted. Triagers trust reports that show restraint.
@@ -51,6 +52,7 @@ No section may be skipped, renamed, or reordered. If information does not fit on
 
 ## F-1 · <Title>
 - **Severity:** CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N — X.X <class>
+- **VRT:** <category > subcategory > variant> [P1..P5]
 - **Endpoint:** `<method> <path>`
 - **Class:** CWE-xxx
 

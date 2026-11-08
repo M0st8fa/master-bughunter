@@ -14,6 +14,7 @@ Scope-respected: <in-scope patterns>. Audit log: recon/audit.log
 - Impact: <attacker outcome, chained impact>
 - Remediation: <one actionable fix>
 - CVSS: <vector> (<score>)
+- VRT: <category > subcategory > variant> [P1..P5]  (Bugcrowd; deepest variant per bb-report VRT map)
 - Evidence: <recon/... file paths>
 
 ## TESTED-NEGATIVE (do not report)
