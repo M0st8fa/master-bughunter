@@ -44,6 +44,26 @@ scope. A *different* program in the same workspace is a conflict: a new or mater
 changed scope gets its own workspace/engagement. **Authorization is never carried from
 one program to unrelated targets.**
 
+**Quick-start — operator declaration (Path A).** When the operator's prompt names
+domains and declares them in scope, `scripts/scope_gate.py` is the one-command entry:
+
+```bash
+python3 -I scripts/scope_gate.py --workspace recon \
+  --operator-declared "example.com, api.example.com" --quote "<verbatim operator words>" \
+  [--exclude "blog.example.com"] [--scope-yaml scope.yaml] [--program <id>] \
+  [--rate-limit 5] [--restrictions "..."] [--header "X-Tag: <researcher-tag>"]
+```
+
+It resolves effective scope (declared domains **and their subdomains**, minus stated
+exclusions, minus `out_of_scope` in an optional `scope.yaml`), records the verbatim
+quote + timestamp in `runs/run-<ts>.md` + `audit.log`, and writes the SAME manifest with
+`authorization.basis: operator-declared`. `scope.yaml` (minimal subset: `in_scope`,
+`out_of_scope`, `rate_limit_rps`, `restrictions`, `posture`, `program`) is consumed at
+gate time and merged into the manifest — the manifest stays the single runtime source.
+With NEITHER a declaration NOR any scope source it writes a blocked record
+(`runs/blocked-<ts>.md`) and exits 1 — nothing is authorized, ask one consolidated
+question. The docs/SAFETY.md human-judgment gates still apply after the gate.
+
 Never pass raw credentials, cookies, API tokens, or session secrets to the manifest. The
 script refuses secret-shaped values (exit 2) so they cannot enter persistent state. The
 `researcher-tag`/required headers stored here are non-secret identifiers only.

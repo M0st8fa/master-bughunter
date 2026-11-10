@@ -10,7 +10,8 @@ Honest disclosure of what is incomplete, unsupported, or unverified. Updated 202
   the skills, the learning context is lost.
 
 ## Validation status (as of this build)
-- Static validation: **all 29 skills pass** (`scripts/validate_skills.py`, 0 errors).
+- Static validation: **all 34 skills pass** (`scripts/validate_skills.py`, 0 errors;
+  re-run 2026-11-08).
 - Behavioral tests: **framework in place, full scenario sets not yet run** for the ported
   specialists. They are therefore `under-review`, not `validated`. Quality scores in
   `SKILL_INDEX.md` are not yet filled in per skill — that is Batch 2+ work via

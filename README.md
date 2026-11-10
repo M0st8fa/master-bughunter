@@ -21,10 +21,10 @@ system scores and validates every skill; and a human-approved, file-based improv
 lets the library get better over time without ever auto-applying changes to a target or to
 itself.
 
-- **33 skills** — 1 orchestrator (`security-hunt`) + the `engagement` support skill
-  (persistent authorization/scope state + recon-folder ingestion) + 31 specialists (recon
-  & intelligence, per-bug-class hunters, API/cloud/detection, pipeline & calibration,
-  reporting). Full catalog: [`SKILL_INDEX.md`](SKILL_INDEX.md).
+- **34 skills** — 1 orchestrator (`security-hunt`) + the `engagement` support skill
+  (persistent authorization/scope state + recon-folder ingestion) + 32 specialists (recon
+  & intelligence, per-bug-class hunters incl. `bb-cache`, API/cloud/detection, pipeline &
+  calibration, reporting). Full catalog: [`SKILL_INDEX.md`](SKILL_INDEX.md).
 - **10 self-learning commands** (`/skills-*`) — a controlled, human-approved
   Observe → Verify → Propose → Test → Approve → Update loop.
 - **Quality system** — a 12-category rubric ([`docs/QUALITY_RUBRIC.md`](docs/QUALITY_RUBRIC.md)),
@@ -48,7 +48,7 @@ static validation, behavioral set pending). Full table in [`SKILL_INDEX.md`](SKI
 - `recon-engine` — passive brain (`recon.py`, keyless/sandbox-safe) + active muscle (`recon.sh`, Go toolchain — the standard engine for fresh active recon, run wherever a terminal + toolchain are available) · `badrecon` · `footprinting` · `target-intelligence` · `js-recon` · `js-audit` · `signup-agent` (authorized account creation for testing).
 
 **Vulnerability hunters (bug class → skill)**
-- `bb-authz` (access control / IDOR / BOLA / privesc) · `idor-runner` · `bb-xss` · `bb-domxss` · `bb-sqli` · `bb-ssrf` · `bb-csrf` · `bb-rce` · `bb-bizlogic` · `bb-race` · `bb-upload` · `bb-oauth` · `bb-graphql` · `bb-pii`.
+- `bb-authz` (access control / IDOR / BOLA / privesc) · `idor-runner` · `bb-xss` · `bb-domxss` · `bb-sqli` · `bb-ssrf` · `bb-csrf` · `bb-rce` · `bb-bizlogic` · `bb-race` · `bb-upload` · `bb-oauth` · `bb-graphql` · `bb-cache` (cache deception/poisoning) · `bb-pii`.
 
 **API, cloud & defensive**
 - `api-security` (OWASP API Top 10 2023) · `cloud-security` (AWS/GCP/Azure posture + IAM) · `detection-engineering` (Sigma → SPL/KQL/EQL, ATT&CK, threat hunting).
@@ -154,7 +154,7 @@ Drive the improvement loop with the `/skills-*` commands:
 
 ```
 master-bughunter/
-├─ skills/        33 skills (each a dir: SKILL.md + optional references/scripts/assets)
+├─ skills/        34 skills (each a dir: SKILL.md + optional references/scripts/assets)
 ├─ commands/      /skills-* self-learning command catalog (.md)
 ├─ references/    shared knowledge (deduped)
 ├─ scripts/       validate_skills.py and utilities

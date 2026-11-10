@@ -17,27 +17,41 @@ record of findings and evidence.
 ## Step 0 — Establish the engagement ONCE (one-time authorization & scope gate)
 
 Run the authorization + scope gate **a single time per engagement**, through the
-`engagement` skill, then persist it so the rest of the hunt does not re-ask.
+`engagement` skill, then persist it (the engagement manifest) so the rest of the hunt
+does not re-ask. Two resolution paths — evaluate them **before any active step**; the
+gate is a predicate evaluation plus a record write, not a conversation:
+
+**Path A — operator declaration (quick-start; private programs).** The operator's current
+prompt names one or more domains and declares them in scope — any phrasing ("hunt
+example.com", "test example.com and api.example.com") counts. The declaration **is** the
+authorization basis for that engagement. Run `scope_gate.py --operator-declared
+"<domains>" --quote "<verbatim operator words>"` (in the `engagement` skill's scripts):
+it resolves effective scope (named domains **and their subdomains**, minus exclusions the
+operator states, minus `out_of_scope` entries in an optional `scope.yaml`), records the
+verbatim quote + timestamp (`runs/run-<ts>.md` + `audit.log`), and writes the SAME
+engagement manifest (`authorization.basis: operator-declared`) that every specialist
+reads. Only the operator widens or narrows scope — discovered hosts that match no root
+stay `needs_clarification` and are logged, never tested.
+
+**Path B — program materials / scope.yaml.** Extract scope from the supplied program
+page/files automatically (never retype-interview the user) or from an optional
+`scope.yaml` (`in_scope`, `out_of_scope`, `rate_limit_rps`, `restrictions`, `posture`,
+`program`), then write the manifest with `engagement.py init` (see the `engagement`
+skill). **Posture** — production vs lab; on production: non-destructive proof only.
 
 1. **Check for a saved engagement first.** `python3 -I <engagement>/scripts/engagement.py
    --workspace recon resume`. If a manifest exists with `authorization.established: true`,
    **reuse it** — do not re-run the gate, re-confirm scope, or re-interview. Continue from
-   the reported `continue_from` phase.
-2. **If none exists, establish it once:**
-   - **Authorization basis** — a bug bounty program with published scope, a signed
-     engagement, a lab/CTF, or the user's own system. The user naming a program and scope
-     (or stating the targets are theirs to hunt) **is** the authorization for that
-     engagement.
-   - **Scope & rules** — in-scope roots, explicit exclusions, rate limits, required
-     headers, testing restrictions. **Extract these from the supplied page/files/workspace
-     automatically** rather than asking the user to retype them.
-   - **Posture** — production vs lab. On production: non-destructive proof only.
-   - Write the manifest (`engagement.py init …`; see the `engagement` skill). Never store
-     raw credentials/cookies/tokens — the script refuses secret-shaped values.
-3. If authorization is genuinely absent (no program, no scope, no statement of
-   ownership), passive-only study of public artifacts is fine; ask **one** consolidated
-   question for the missing essentials. Record the basis in each finding's `authorization`
-   field (`schemas/finding.schema.json`).
+   the reported `continue_from` phase. Both `init` and `scope_gate.py` are idempotent for
+   the same program; a **different** program in the same workspace is a conflict — a new
+   or materially changed scope gets its own workspace/engagement, and authorization never
+   carries to unrelated targets.
+2. **If none exists, establish it once via Path A or Path B above.** Never store
+   raw credentials/cookies/tokens — the scripts refuse secret-shaped values.
+3. **If neither path yields anything** (no declared target, no program/scope file):
+   write a blocked record (`runs/blocked-<ts>.md`), keep to passive-only study of public
+   artifacts, and ask **one** consolidated question for the missing essentials. Record the
+   basis in each finding's `authorization` field (`schemas/finding.schema.json`).
 
 ### Once established — stop re-asking (applies to this skill and every specialist)
 Do **not** re-ask whether the target is authorized, ask approval before each request /
@@ -70,7 +84,8 @@ xss/dom → `bb-xss`, `bb-domxss` · sqli → `bb-sqli` · ssrf → `bb-ssrf` ·
 csrf → `bb-csrf` · rce/injection → `bb-rce` · idor/bola/bac/privesc → `bb-authz`,
 `idor-runner` · business logic → `bb-bizlogic` · race/TOCTOU → `bb-race` ·
 file upload → `bb-upload` · oauth/sso/ato → `bb-oauth` · graphql → `bb-graphql` ·
-pii/data exposure → `bb-pii` · cloud/iam → `cloud-security` (if present) ·
+pii/data exposure → `bb-pii` · cache deception/poisoning → `bb-cache` ·
+cloud/iam → `cloud-security` (if present) ·
 container/k8s → `container-k8s-security` · network service → `network-service-assessment` ·
 detection/log analysis → `detection-engineering` · threat hunt/IR → `threat-hunting`.
 

@@ -26,14 +26,18 @@ tooling (jar files, Burp, Cookie-Editor), referenced by label, never copied here
 ## Lifecycle
 ```
 init (once) ── establishes authorization.established=true, writes scope
+   │            (or scope_gate.py --operator-declared: the operator's prompt declaration
+   │             IS the basis; writes the same manifest + runs/run-<ts>.md + audit.log)
    │
    ├─ resume ─ reuse the manifest, continue from the saved phase (NO re-gate)
    ├─ classify ─ in_scope | out_of_scope | needs_clarification (exclusions win)
    └─ set ─ advance phase / recon status / add completed-work entries
 ```
 
-`init` is **idempotent**: a second call for the same program returns `reused`, not a new
-gate. A different program in the same workspace is a `conflict` (use a new workspace).
+`init` (and `scope_gate.py`) is **idempotent**: a second call for the same program
+returns `reused`, not a new gate. A different program in the same workspace is a
+`conflict` (use a new workspace). With no declaration and no scope source,
+`scope_gate.py` writes `runs/blocked-<ts>.md` and exits 1 — nothing is authorized.
 
 ## Phases (resume continues from the next incomplete one)
 `setup → scope → recon → import → inventory → intel → routing → validation → evidence →

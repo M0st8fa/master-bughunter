@@ -39,6 +39,10 @@ responsible disclosure. These rules bind every skill and command.
 - `/skills-audit` and `scripts/validate_skills.py` scan for secret-shaped strings; the
   packaging step refuses `*.env` with non-placeholder values.
 - Own-account PoCs only for cross-account bugs — never touch a third party's data.
+- **Program-specific skills stay local.** Skills that embed operator-private context —
+  per-program co-testers, credential-file paths, private report corpora — live in the
+  local skills directory (git-ignored workspace) and are **never committed** to this
+  public repository.
 
 ## Human-in-the-loop
 - Consequential or risky actions require explicit user approval. Automating routine

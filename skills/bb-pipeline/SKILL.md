@@ -24,7 +24,7 @@ Run in order. Skip only phases the user explicitly excludes.
 
 ### Phase 0 — Engagement, workspace & scope
 - `mkdir -p recon/{subdomains,js,ips,findings}`; start `audit.log`.
-- **Load or create the engagement manifest:** `engagement.py --workspace recon resume`; if absent, `engagement.py init --program … --roots … --exclude … --restrictions …`. This parses the program scope into in-scope roots, out-of-scope patterns, known-issues/forbidden actions, rate limits, and required headers **once** and persists them. Extract these from the supplied program page/files automatically instead of re-asking.
+- **Load or create the engagement manifest:** `engagement.py --workspace recon resume`; if absent, establish it once — `scope_gate.py --operator-declared "<domains>" --quote "<verbatim>"` when the operator declared targets in the prompt (quick-start, writes the same manifest + audit record), else `engagement.py init --program … --roots … --exclude … --restrictions …`. This parses the program scope into in-scope roots, out-of-scope patterns, known-issues/forbidden actions, rate limits, and required headers **once** and persists them. Extract these from the supplied program page/files automatically instead of re-asking.
 - Record the researcher identifier for mandatory headers **in the manifest** (`--researcher-tag` / `--header`, non-secret) once — not per request. Never put tokens/cookies in the manifest.
 - **Recon branch:** if the user supplied an existing recon directory, go to Phase 1b (import) instead of running fresh recon. If `recon.status` is already `running`/`complete`/`imported`, do not re-run.
 
@@ -91,6 +91,7 @@ On Bugcrowd programs, classify every finding with the VRT (`VRT: <path> [P1..P5]
 | File uploads, public buckets, polyglots, serve-side rendering | **bb-upload** |
 | CSRF, content-type defenses, state-changing actions cross-site | **bb-csrf** |
 | GraphQL API | **bb-graphql** |
+| Cache deception/poisoning, CDN `X-Cache`/`cf-cache-status`, cached PII | **bb-cache** |
 | RCE, command injection, SSTI, deserialization, upload-to-RCE | **bb-rce** |
 | PII exposure, data leaks, oversharing, GDPR impact | **bb-pii** |
 | SQL / NoSQL injection | **bb-sqli** |

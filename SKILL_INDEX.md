@@ -1,10 +1,10 @@
 # SKILL_INDEX.md — Catalog & Routing
 
-33 skills (1 orchestrator + 1 orchestration-support + 31 specialists) + 10 self-learning commands.
+34 skills (1 orchestrator + 1 orchestration-support + 32 specialists) + 10 self-learning commands.
 Status per `docs/QUALITY_RUBRIC.md`. 7 skills are `validated` (behavioral tests passed);
 the rest pass static validation (0 errors) and are `under-review` pending their behavioral
 sets. Scores filled in by `/skills-improve` and `/skills-test`. Last static run:
-2026-10-23 (33/33 pass, 0 errors).
+2026-11-08 (34/34 pass, 0 errors).
 
 ## Layer 1 — Orchestration
 | Skill | Status | Purpose |
@@ -41,6 +41,7 @@ sets. Scores filled in by `/skills-improve` and `/skills-test`. Last static run:
 | `bb-upload` | under-review | File-upload (serve-side) |
 | `bb-oauth` | under-review | OAuth / SSO / ATO |
 | `bb-graphql` | under-review | GraphQL-specific |
+| `bb-cache` | under-review | Web cache attacks — cache deception (cross-user PII read) + cache poisoning (unkeyed-input reflection); two-client proof discipline. |
 | `bb-pii` | under-review | PII exposure / data leaks |
 
 ### Extended-coverage specialists (new, Batch 4)

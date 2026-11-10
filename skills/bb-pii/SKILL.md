@@ -33,7 +33,7 @@ Delta lesson: email/attribute disclosure through invite/collaborate lookups, fat
 1. Inventory personal endpoints from JS (js-recon): profile, addresses, orders, messages, tickets, documents.
 2. For each: response with session (baseline) → response WITHOUT session → response with OTHER own session. The three-way diff is the whole skill.
 3. Field-level audit of baseline: list every field; mark which the UI displays; the invisible ones (internal flags, IDs, hashes) are candidates for "unnecessary data exposure".
-4. Check response headers: `Cache-Control`, `Vary: Cookie`, CDN cache status on authenticated responses (a cached `/account` on a shared CDN = cross-user leak).
+4. Check response headers: `Cache-Control`, `Vary: Cookie`, CDN cache status on authenticated responses (a cached `/account` on a shared CDN = cross-user leak → hand the cacheable-personal-response angle to **bb-cache** for the full deception/poisoning ladder).
 5. Documents: request your own invoice/label URL; then vary the ID by ±1/other-format — combine with bb-authz V1/V10.
 
 ## Verdict rules
