@@ -5,6 +5,62 @@ Format: reverse-chronological. Dates are absolute (YYYY-MM-DD).
 
 ## [Unreleased]
 
+### 2026-11-08 — P0 hardening + merged authorization architecture (IQ-008/009/010)
+- **Line endings fixed at the root (IQ-008).** New `.gitattributes` forces `eol=lf` for
+  `.sh/.py/.lock/.json/.jsonl/.csv/.md/.env.example`; previously CRLF-committed blobs
+  (incl. the vendored `recon.sh`/`setup.sh` and both corpora) renormalized. Fresh Windows
+  clones now get runnable scripts. `recon_sync.py` hashes **LF-normalized** text (raw-byte
+  hashing permanently reported `drifted-from-lock` on `core.autocrlf` checkouts), also
+  validates the `setup.sh` pin, and normalizes the remote-side hash; its test now
+  simulates the bundled copy in a tempdir instead of mutating the vendored `recon.sh`
+  (repo-corruption risk removed) and pins EOL-only differences as non-drift.
+- **Untrusted-data injection removed (IQ-009).** `recon.sh` `check_cors`/`check_git_exposure`
+  passed target-influenced data (passive-source hosts, crawled URLs) through
+  `xargs -I … bash -c 'u="HOST"'` — metacharacters in that data executed in the inner
+  shell. Workers now receive data via environment variables; the inner script is a fixed
+  literal. The vendored `recon.sh` differs from the canonical repo by this hardening:
+  `recon-script.lock` re-pinned to the hardened hash — **apply the same fix upstream in
+  M0st8fa/Recon-Script and re-sync**.
+- **api_discover.sh token-leak fixed.** Unquoted `$AUTH` word-split the header (curl got
+  `-H Authorization:` empty AND the bearer token as a URL → token leaked into DNS
+  resolver traffic). Now a properly quoted array + `mktemp` + trap cleanup.
+- **Scope integrity in `recon.py`.** Dot-boundary matching (`_same_or_sub`,
+  `_host_in_scope`) — `evilacme.com` no longer classifies in-scope for `*.acme.com`;
+  bare patterns match only themselves (aligned with the engagement engine); `--scope`
+  file validated BEFORE provider runs (a bad path no longer loses the whole run).
+- **Ingest correctness.** Corrupted inventory rows (missing `key`) are skipped instead of
+  crashing the ingest; IPv6 netlocs (`[::1]:8080`) no longer mangled to `[`;
+  `needs_clarification` rows carry their own `test_status` instead of being written as
+  `excluded`.
+- **IDOR matrix correctness.** `idor_matrix.py`: one HTTP session per jar (a shared
+  session let account A's `Set-Cookie`s bleed into account B's requests and skew
+  differentials), results saved incrementally after every test (a crash no longer loses
+  the run), all-errored tests report INCONCLUSIVE, unresolved `{OBJ:…}` placeholders skip
+  with a warning instead of firing garbage paths, UTF-8 outputs; SKILL.md now describes
+  the actual `--inventory` mechanism.
+- **Merged authorization architecture (IQ-010, option c).** New
+  `skills/engagement/scripts/scope_gate.py` — operator-declaration quick-start: resolves
+  effective scope (declared domains + subdomains, minus stated exclusions, minus
+  `scope.yaml` `out_of_scope`), records the verbatim quote + timestamp
+  (`runs/run-<ts>.md` + `audit.log`), and writes the SAME engagement manifest
+  (`authorization.basis: operator-declared`) — one durable state store. Consumes an
+  optional minimal-subset `scope.yaml` (in_scope/out_of_scope/rate_limit_rps/posture/
+  program/restrictions). Halt-and-log (`runs/blocked-<ts>.md`, exit 1) when nothing is
+  declared and no scope source exists; secret-shaped quotes refused (exit 2); idempotent
+  reuse / cross-program conflict preserved. The docs/SAFETY.md human-judgment gates are
+  NOT automated away. Wired into `security-hunt` Step 0 (Path A/B), `engagement` SKILL.md,
+  `bb-pipeline` Phase 0, `docs/ENGAGEMENT.md`.
+- **`bb-cache` skill ported** (web cache deception + poisoning, two-client proof
+  discipline) — 34 skills total; routing updated in SKILL_INDEX, README, security-hunt
+  bug-class map, bb-pipeline routing table, and bb-pii step 4 handoff.
+- **docs/SAFETY.md**: program-specific skills (per-program co-testers, credential-path
+  skills) are documented as **local-only, never committed**.
+- **Tests:** new `tests/engagement/test_scope_gate.py` (22 checks: yaml parsing,
+  establish/reuse/conflict, halt-and-log, secret refusal, yaml+exclusion semantics) and
+  `tests/recon-engine/test_recon_scope.py` (9 checks: dot-boundary matching); all four
+  suites green (22+9+12+47 = 90 checks), `validate_skills.py` **34/34, 0 errors**; test
+  files set `sys.dont_write_bytecode` so runs leave no `__pycache__` in the tree.
+
 ### 2026-11-08 — Bugcrowd VRT integration (report classification + reward-prioritized hunting)
 - **New `bb-report/references/vrt-mapping.md`** — official Bugcrowd Vulnerability Rating
   Taxonomy snapshot (release 2026-07-08, from
