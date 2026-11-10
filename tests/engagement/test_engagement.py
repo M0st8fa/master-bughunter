@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import sys
+sys.dont_write_bytecode = True  # keep __pycache__ out of the repo tree
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
