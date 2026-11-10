@@ -5,37 +5,46 @@ Usage:
       --ua "exact UA from the cURL blocks" --tests tests.json [--inventory inv.json] [--out idor_results]
 Jar files: one line of "k=v; k=v" cookies each.
 tests.json: [{"method":"GET","path":"/api/x/{OBJ:acc1.address.id}","body":{...}}, ...]
-  {OBJ:<jarname-without-.txt>.<dotted.path>} is replaced with values from inventory JSON.
-Inventory JSON: {"acc1": {"address": {"id": 123}}, ...}  (from Step-2 listing dumps)
+  {OBJ:<jarname-without-.txt>.<dotted.path>} is replaced with values from --inventory.
+Inventory JSON: {"acc1": {"address": {"id": 123}}, ...}  (the Step-2 object table).
+  A test whose placeholders cannot be resolved from the inventory is SKIPPED with a
+  warning — never fired against a literal {OBJ:...} path. Each jar gets its OWN HTTP
+  session (one shared session let account A's Set-Cookie responses bleed into account
+  B's requests and skew differentials). Results are saved incrementally after every
+  test, so a crash mid-run keeps everything completed so far.
 Requires: pip install curl_cffi
 """
-import argparse, json, re, time, sys
+import argparse, json, os, re, time, sys
+
+OBJ_RE = re.compile(r"\{OBJ:([^}]+)\.([^}]+)\}")
 
 def load_jar(path):
     c = {}
-    for part in open(path).read().strip().split(";"):
+    for part in open(path, encoding="utf-8").read().strip().split(";"):
         if "=" in part:
             k, v = part.split("=", 1)
             c[k.strip()] = v.strip()
     return c
 
 def interp(path, inv):
+    """Resolve {OBJ:jar.dotted.path} from the inventory. Returns (path, unresolved list)."""
+    unresolved = []
     def rep(m):
         jar, dotted = m.group(1), m.group(2).split(".")
         node = inv.get(jar)
         for k in dotted:
             node = (node or {}).get(k)
-        return str(node) if node is not None else m.group(0)
-    return re.sub(r"\{OBJ:([^}]+)\.([^}]+)\}", rep, path)
+        if node is None:
+            unresolved.append(m.group(0))
+            return m.group(0)
+        return str(node)
+    return OBJ_RE.sub(rep, path), unresolved
 
-def deep_find(obj, key_re, hits):
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if re.search(key_re, str(k), re.I) and not isinstance(v, (dict, list)):
-                hits.append(v)
-            deep_find(v, key_re, hits)
-    elif isinstance(obj, list):
-        for it in obj: deep_find(it, key_re, hits)
+def save(out, results):
+    tmp = out + ".json.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=1)
+    os.replace(tmp, out + ".json")  # atomic: incremental state is never truncated
 
 def main():
     ap = argparse.ArgumentParser()
@@ -43,7 +52,7 @@ def main():
     ap.add_argument("--jars", nargs="+", required=True)
     ap.add_argument("--ua", required=True)
     ap.add_argument("--tests", required=True)
-    ap.add_argument("--inventory", help="JSON of discovered object IDs per jar")
+    ap.add_argument("--inventory", help="JSON of discovered object IDs per jar (Step-2 table)")
     ap.add_argument("--out", default="idor_results")
     ap.add_argument("--delay", type=float, default=1.3)
     a = ap.parse_args()
@@ -52,46 +61,68 @@ def main():
         from curl_cffi import requests as cr
     except ImportError:
         sys.exit("pip install curl_cffi")
-    s = cr.Session(impersonate="chrome")
+
+    inv = {}
+    if a.inventory:
+        with open(a.inventory, encoding="utf-8") as f:
+            inv = json.load(f)
+    with open(a.tests, encoding="utf-8") as f:
+        tests = json.load(f)
+    jars = {re.sub(r"\.txt$", "", j): load_jar(j) for j in a.jars}
+    # ONE SESSION PER JAR — never share a cookie jar across accounts (response
+    # Set-Cookies from jar A would otherwise persist and co-send with jar B).
+    sessions = {name: cr.Session(impersonate="chrome") for name in jars}
     H = {"User-Agent": a.ua, "Accept": "application/json, text/plain, */*",
          "Accept-Language": "en-US,en;q=0.9", "Referer": a.base + "/"}
 
-    inv = json.load(open(a.inventory)) if a.inventory else {}
-    tests = json.load(open(a.tests))
-    jars = {re.sub(r"\.txt$", "", j): load_jar(j) for j in a.jars}
-    results, log = [], open(a.out + ".log", "w", encoding="utf-8")
+    log = open(a.out + ".log", "w", encoding="utf-8")
 
     def emit(line):
         print(line); log.write(line + "\n"); log.flush()
+
+    results = []
 
     # Phase 0: identify each session
     emit("=== SESSION IDENTIFICATION (fill identity_path in tests.json as __IDENTITY__ to customize) ===")
     ident = next((t for t in tests if t.get("role") == "identity"), None)
     if ident:
-        for name, ck in jars.items():
-            r = s.get(a.base + interp(ident["path"], {}), headers=H, cookies=ck, timeout=25)
-            alive = r.status_code == 200 and "false" not in r.text[:60]
-            emit(f"[{name}] {r.status_code} {r.text[:120]} -> {'ALIVE' if alive else 'DEAD (ask user for fresh jar)'}")
+        for name, s in sessions.items():
+            try:
+                r = s.get(a.base + ident["path"], headers=H, cookies=jars[name], timeout=25)
+                alive = r.status_code == 200 and "false" not in r.text[:60]
+                emit(f"[{name}] {r.status_code} {r.text[:120]} -> {'ALIVE' if alive else 'DEAD (ask user for fresh jar)'}")
+            except Exception as e:
+                emit(f"[{name}] ERR {type(e).__name__}")
             time.sleep(a.delay)
 
     for i, t in enumerate(tests):
         if t.get("role") in ("identity",): continue
-        method, path = t["method"].upper(), interp(t["path"], inv)
+        method = t["method"].upper()
+        path, unresolved = interp(t["path"], inv)
+        if unresolved:
+            emit(f"\n--- TEST {i+1}: SKIPPED — unresolved placeholder(s) {unresolved} "
+                 f"(add the object IDs to the --inventory JSON from the Step-2 listing)")
+            results.append({"method": method, "path": t["path"], "verdict": "skipped-unresolved-placeholder",
+                            "unresolved": unresolved, "attempts": []})
+            save(a.out, results)
+            continue
         body = t.get("body")
         row = {"method": method, "path": path, "attempts": []}
         emit(f"\n--- TEST {i+1}: {method} {path}")
-        for name, ck in jars.items():
+        for name, s in sessions.items():
             try:
                 r = s.request(method, a.base + path, headers={**H, "Content-Type": "application/json"},
-                              cookies=ck, json=body, timeout=25)
+                              cookies=jars[name], json=body, timeout=25)
                 emit(f"[{name}] {r.status_code} {r.text[:180]}")
                 row["attempts"].append({"jar": name, "status": r.status_code, "body": r.text[:500]})
             except Exception as e:
                 emit(f"[{name}] ERR {type(e).__name__}")
             time.sleep(a.delay)
-        # verdict heuristics
+        # verdict heuristics — an all-errored test is INCONCLUSIVE, not uniform
         st = {x["jar"]: x["status"] for x in row["attempts"]}
-        if len(set(st.values())) > 1:
+        if not st:
+            row["verdict"] = "INCONCLUSIVE — every request errored (no attempt succeeded; fix connectivity/tokens and re-run)"
+        elif len(set(st.values())) > 1:
             ok_owner = any(v in (200, 201, 204) for v in st.values())
             row["verdict"] = ("DIFFERENTIAL — check who got what; foreign 2xx = suspected IDOR" if ok_owner
                               else "DIFFERENTIAL statuses (verify positive control first)")
@@ -99,8 +130,10 @@ def main():
             row["verdict"] = f"uniform {list(st.values())[0]}"
         emit(f"VERDICT: {row['verdict']}")
         results.append(row)
+        save(a.out, results)   # incremental: a crash never loses completed tests
 
-    json.dump(results, open(a.out + ".json", "w"), indent=1)
+    save(a.out, results)
+    log.close()
     print(f"\nsaved {a.out}.json / .log")
 
 if __name__ == "__main__":

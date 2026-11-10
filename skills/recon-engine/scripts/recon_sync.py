@@ -52,10 +52,17 @@ def read_lock():
 
 
 def sha256_file(path):
+    """sha256 of a file's TEXT content with CRLF line endings normalized to LF.
+
+    The lock pins hashes of LF content (as committed). On Windows checkouts
+    (core.autocrlf=true) the working tree holds CRLF, so raw-byte hashing falsely
+    reported `drifted-from-lock` for byte-identical content. EOL-insensitive
+    hashing makes the freshness check correct on every checkout; content drift is
+    still detected (EOL-only differences are not content drift)."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
+        data = f.read()
+    h.update(data.replace(b"\r\n", b"\n"))
     return h.hexdigest()
 
 
@@ -140,6 +147,16 @@ def cmd_status(a):
                           "`ensure` or restore the vendored copy")
         print(json.dumps(out, indent=2))
         return 0
+    # The lock also pins setup.sh — a drifted installer would otherwise go unnoticed.
+    locked_setup = lock.get("setup_sh_sha256")
+    bundled_setup = os.path.join(HERE, "setup.sh")
+    if kind == "bundled" and locked_setup and os.path.exists(bundled_setup) \
+            and locked_setup != sha256_file(bundled_setup):
+        out.update(state="drifted-from-lock", locked_setup_sha256=locked_setup,
+                   action="bundled setup.sh differs from the vendored lock; re-sync with "
+                          "`ensure` or restore the vendored copy")
+        print(json.dumps(out, indent=2))
+        return 0
 
     # Online path: ask the canonical repo for its current recon.sh and compare.
     if a.dir and os.path.isdir(os.path.join(a.dir, ".git")) and _have_git():
@@ -155,7 +172,8 @@ def cmd_status(a):
         if fetch.returncode == 0:
             show = _git("show", "FETCH_HEAD:recon.sh", cwd=a.dir)
             if show.returncode == 0:
-                remote_sha = hashlib.sha256(show.stdout.encode()).hexdigest()
+                remote_sha = hashlib.sha256(
+                    show.stdout.encode().replace(b"\r\n", b"\n")).hexdigest()
                 out["remote_sha256"] = remote_sha
                 out["state"] = "up_to_date" if remote_sha == local_sha else "stale"
                 out["action"] = ("none" if remote_sha == local_sha else

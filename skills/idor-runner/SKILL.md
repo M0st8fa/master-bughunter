@@ -32,7 +32,11 @@ tests.json format:
  {"method": "PATCH",  "path": "/api/v1/addresses/{OBJ:acc1.address_id}", "body": {"name": "x"}},
  {"method": "DELETE", "path": "/api/v1/addresses/{OBJ:acc1.address_id}"}]
 ```
-`{OBJ:<jar>.<dotted.path>}` interpolates IDs discovered in Step 2 (the script deep-searches each jar's recorded responses). The runner:
+`{OBJ:<jar>.<dotted.path>}` interpolates IDs from the Step-2 inventory — pass it as
+`--inventory inv.json` (`{"acc1": {"address_id": 123}, ...}`). A test whose placeholders
+cannot be resolved is skipped with a warning, never fired against a literal path. Each
+jar gets its own HTTP session (cookies never cross accounts), and results are saved
+incrementally after every test. The runner:
 
 1. **Positive control first** — owner performs the same request. If the owner can't succeed, the format/token is wrong and every cross-account 4xx is meaningless. Fix the control before concluding anything.
 2. Cross-account run from every *other* jar.

@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import sys
+sys.dont_write_bytecode = True  # keep __pycache__ out of the repo tree
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -81,16 +82,34 @@ def t_status_missing_local():
 def t_status_drift_from_lock_bundled_only():
     # Drift-from-lock applies to the BUNDLED copy only: a hand-edited bundle is flagged,
     # while a separate --local/clone that differs is NOT (it is checked vs the repo).
-    backup = BUNDLED + ".bak"
-    shutil.copy(BUNDLED, backup)
+    # Simulated via a temp "bundled" dir (recon.sh + the real lock), so the test never
+    # mutates the vendored files in the repo.
+    tmp = tempfile.mkdtemp()
+    old_here = rs.HERE
     try:
-        with open(BUNDLED, "a") as f:
+        shutil.copy(BUNDLED, os.path.join(tmp, "recon.sh"))
+        shutil.copy(rs.LOCK, os.path.join(tmp, "recon-script.lock"))
+        with open(os.path.join(tmp, "recon.sh"), "a") as f:
             f.write("\n# locally appended, drifts from the vendored lock\n")
-        rc, out = run("status")   # no --local/--dir -> checks the bundled copy
+        rs.HERE = tmp
+        rc, out = run("status")   # no --local/--dir -> checks the (simulated) bundled copy
         check("status-drifted-bundled", rc == 0 and out.get("state") == "drifted-from-lock"
               and out.get("checking") == "bundled", str(out))
+        # an EOL-only difference (CRLF working copy) is NOT drift
+        tmp2 = tempfile.mkdtemp()
+        shutil.copy(BUNDLED, os.path.join(tmp2, "recon.sh"))
+        shutil.copy(rs.LOCK, os.path.join(tmp2, "recon-script.lock"))
+        with open(os.path.join(tmp2, "recon.sh"), "rb") as f:
+            data = f.read().replace(b"\n", b"\r\n")
+        with open(os.path.join(tmp2, "recon.sh"), "wb") as f:
+            f.write(data)
+        rs.HERE = tmp2
+        rc, out = run("status")
+        check("status-eol-only-not-drift", rc == 0 and out.get("state") != "drifted-from-lock",
+              str(out))
     finally:
-        shutil.move(backup, BUNDLED)
+        rs.HERE = old_here
+        shutil.rmtree(tmp, ignore_errors=True)
     # an explicit non-bundled script that differs is not mislabeled as drift
     tmp = tempfile.mkdtemp()
     try:
@@ -129,6 +148,7 @@ def t_norm_repo_equivalence():
 
 def t_bundled_matches_lock():
     # the committed recon.sh must match the sha recorded in recon-script.lock
+    # (EOL-insensitive: CRLF working trees on Windows are not drift)
     lock = rs.read_lock()
     check("bundled-recon.sh-matches-lock",
           os.path.exists(BUNDLED) and rs.sha256_file(BUNDLED) == lock.get("recon_sh_sha256"),

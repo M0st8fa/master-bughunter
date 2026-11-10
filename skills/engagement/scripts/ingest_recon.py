@@ -110,7 +110,11 @@ def normalize(url: str):
     sp = urlsplit(url)
     if not sp.netloc:
         return None
-    host = sp.netloc.rsplit("@", 1)[-1].split(":", 1)[0].lower().rstrip(".")
+    nl = sp.netloc.rsplit("@", 1)[-1]
+    if nl.startswith("["):  # IPv6 literal: [::1]:8080 — split on ']', not ':' (the old
+        host = nl.split("]", 1)[0].lstrip("[").lower().rstrip(".")  # ':' split mangled it to '[')
+    else:
+        host = nl.split(":", 1)[0].lower().rstrip(".")
     path = sp.path or "/"
     params = sorted(k for k, _ in parse_qsl(sp.query, keep_blank_values=True))
     return {"host": host, "path": path, "params": params, "query": sp.query,
@@ -317,6 +321,8 @@ def load_jsonl(path):
                 r = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(r, dict) or "key" not in r:
+                continue  # corrupted/hand-edited row: skip instead of crashing the ingest
             rows[r["key"]] = r
     return rows
 
@@ -330,8 +336,9 @@ def write_jsonl(path, rows):
 
 
 def _status_rank(s):
-    # progress order: anything other than pending/excluded (e.g. "done") is real work.
-    return {"excluded": 0, "pending": 1}.get(s, 2)
+    # progress order: anything other than pending/excluded/needs_clarification
+    # (e.g. "done") is real work.
+    return {"excluded": 0, "needs_clarification": 0, "pending": 1}.get(s, 2)
 
 
 def _reclassify(inventory, excluded, roots, excl, has_manifest):
@@ -443,7 +450,12 @@ def ingest(recon_dir, workspace):
                         "tech": tech,
                         "sources": [src],
                         "route": route(rec, method, tech) if cls == "in_scope" else [],
-                        "test_status": "pending" if cls == "in_scope" else "excluded",
+                        # three distinct states: pending work, unclassified (never
+                        # scheduled), and out-of-scope (never tested) — the old code
+                        # wrote "excluded" for needs_clarification, conflating the two.
+                        "test_status": {"in_scope": "pending",
+                                        "needs_clarification": "needs_clarification",
+                                        }.get(cls, "excluded"),
                         "checks_done": [],
                         "evidence": [],
                         "findings": [],

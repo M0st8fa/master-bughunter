@@ -1041,19 +1041,26 @@ check_cors() {
 
     info "Testing CORS on $(wc -l < "$hosts_file") unique host(s)..."
 
-    cat "$hosts_file" | xargs -P "$THREADS" -I HOST bash -c '
-        u="HOST"
-        headers=$(timeout 8 curl -sk -D - -o /dev/null --max-time 6 \
-            -H "Origin: '"$canary"'" -A "'"$USER_AGENT"'" "$u" 2>/dev/null)
-        acao=$(echo "$headers" | grep -i "^access-control-allow-origin:" | head -1)
-        acac=$(echo "$headers" | grep -i "^access-control-allow-credentials:" | head -1)
-        if echo "$acao" | grep -qi "'"$canary"'"; then
-            echo "REFLECTED ORIGIN: $u -> $acao" >> "'"$outfile"'"
-        fi
-        if echo "$acao" | grep -q "\*" && echo "$acac" | grep -qi "true"; then
-            echo "WILDCARD+CREDENTIALS: $u -> $acao / $acac" >> "'"$outfile"'"
-        fi
-    ' 2>/dev/null || true
+    # Worker data is passed as an ENVIRONMENT VARIABLE, never substituted into the
+    # script text: hosts come from passive sources + crawled URLs (untrusted), and
+    # `xargs -I bash -c 'u="HOST"'` let metacharacters in that data execute. The
+    # inner script is a fixed literal; values arrive via env only.
+    cat "$hosts_file" | xargs -P "$THREADS" -I HOST \
+        env CORS_HOST_URL="HOST" CORS_CANARY="$canary" CORS_OUTFILE="$outfile" \
+            CORS_UA="$USER_AGENT" \
+        bash -c '
+            u="$CORS_HOST_URL"
+            headers=$(timeout 8 curl -sk -D - -o /dev/null --max-time 6 \
+                -H "Origin: $CORS_CANARY" -A "$CORS_UA" "$u" 2>/dev/null)
+            acao=$(echo "$headers" | grep -i "^access-control-allow-origin:" | head -1)
+            acac=$(echo "$headers" | grep -i "^access-control-allow-credentials:" | head -1)
+            if echo "$acao" | grep -qi "$CORS_CANARY"; then
+                echo "REFLECTED ORIGIN: $u -> $acao" >> "$CORS_OUTFILE"
+            fi
+            if echo "$acao" | grep -q "\*" && echo "$acac" | grep -qi "true"; then
+                echo "WILDCARD+CREDENTIALS: $u -> $acao / $acac" >> "$CORS_OUTFILE"
+            fi
+        ' 2>/dev/null || true
 
     rm -f "$hosts_file"
     local cnt; cnt=$(count_lines "$outfile")
@@ -1066,17 +1073,21 @@ check_git_exposure() {
     > "$outfile"
     info "Checking for exposed .git directories..."
 
-    cat "$alldomains" | xargs -P "$THREADS" -I DOMAIN bash -c '
-        d="DOMAIN"
-        for scheme in https http; do
-            code=$(timeout 8 curl -sk -o /dev/null -w "%{http_code}" --max-time 6 \
-                "${scheme}://${d}/.git/config" 2>/dev/null || echo "000")
-            if [[ "$code" == "200" ]]; then
-                echo "${scheme}://${d}/.git/config [200]" >> "'"$outfile"'"
-                break
-            fi
-        done
-    ' 2>/dev/null || true
+    # Same env-passing discipline as check_cors: domain data is untrusted and is
+    # never substituted into the worker script text.
+    cat "$alldomains" | xargs -P "$THREADS" -I DOMAIN \
+        env GIT_DOMAIN="DOMAIN" GIT_OUTFILE="$outfile" \
+        bash -c '
+            d="$GIT_DOMAIN"
+            for scheme in https http; do
+                code=$(timeout 8 curl -sk -o /dev/null -w "%{http_code}" --max-time 6 \
+                    "${scheme}://${d}/.git/config" 2>/dev/null || echo "000")
+                if [[ "$code" == "200" ]]; then
+                    echo "${scheme}://${d}/.git/config [200]" >> "$GIT_OUTFILE"
+                    break
+                fi
+            done
+        ' 2>/dev/null || true
 
     local cnt; cnt=$(count_lines "$outfile")
     [[ $cnt -gt 0 ]] && warn "${BOLD}.git exposure found: $cnt! → $outfile${RESET}" || log "No .git exposure found"

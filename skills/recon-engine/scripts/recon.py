@@ -57,6 +57,27 @@ def fetch(url, timeout=25):
 
 # ---------------- providers ----------------
 
+def _same_or_sub(name, dom):
+    """True if name equals dom or is a proper subdomain of it — dot-boundary aware.
+    A bare suffix check (name.endswith(dom)) wrongly matches lookalikes:
+    'evilacme.com'.endswith('acme.com') is True but is NOT the target."""
+    n, d = (name or "").lower().rstrip("."), (dom or "").lower().rstrip(".")
+    return bool(n) and (n == d or n.endswith("." + d))
+
+
+def _host_in_scope(host, scope):
+    """Dot-boundary aware scope check, aligned with the engagement engine's semantics:
+    a bare pattern matches ONLY that host (use *.root for subdomain coverage);
+    '*.root' matches subdomains AND the apex. Lookalikes never match."""
+    host = (host or "").lower().rstrip(".")
+    for sc in scope:
+        if sc.startswith("*."):
+            base = sc[2:]
+            if host == base or host.endswith("." + base): return True
+        elif host == sc:
+            return True
+    return False
+
 def p_crtsh(dom):
     st, body = fetch("https://crt.sh/?q=" + urllib.parse.quote("%." + dom) + "&output=json", timeout=60)
     if st != 200: return _err("crtsh", st, body)
@@ -64,7 +85,7 @@ def p_crtsh(dom):
     for row in json.loads(body.decode("utf-8", "replace")):
         for n in str(row.get("name_value", "")).split("\n"):
             n = n.strip().lstrip("*.").lower()
-            if n.endswith(dom) and n: names.add(n)
+            if n and _same_or_sub(n, dom): names.add(n)
     return {"subs": names}
 
 def p_shodan_ctl(dom):
@@ -92,7 +113,7 @@ def p_certspotter(dom):
     for iss in json.loads(body.decode("utf-8", "replace")):
         for n in iss.get("dns_names", []):
             n = n.lstrip("*.").lower()
-            if n.endswith(dom): names.add(n)
+            if _same_or_sub(n, dom): names.add(n)
     return {"subs": names}
 
 def p_urlscan(dom):
@@ -102,7 +123,7 @@ def p_urlscan(dom):
     for r in json.loads(body.decode("utf-8", "replace")).get("results", []):
         page = r.get("page", {})
         d = str(page.get("domain", "")).lower()
-        if d.endswith(dom): subs.add(d)
+        if _same_or_sub(d, dom): subs.add(d)
         u = r.get("url") or page.get("url")
         if u: urls.append({"url": u, "ts": page.get("url", "") and r.get("@timestamp", "")})
         if page.get("ip"): ips[d] = page["ip"]
@@ -180,6 +201,18 @@ def run(args):
     dom = args.target.lower().strip()
     outdir = args.out or os.path.join("recon-out", f"{dom}-{datetime.date.today().isoformat()}")
     os.makedirs(os.path.join(outdir, "raw"), exist_ok=True)
+    # Load/validate scope FIRST — an unreadable --scope file must abort before the
+    # provider runs, never after they finished (which lost the whole run).
+    if args.scope:
+        try:
+            scope_lines = open(args.scope, encoding="utf-8").read().splitlines()
+        except OSError as e:
+            sys.exit(f"error: cannot read --scope file {args.scope}: {e}")
+        scope = [l.strip().lower() for l in scope_lines if l.strip() and not l.startswith("#")]
+        if not scope:
+            sys.exit(f"error: --scope file {args.scope} contains no scope patterns")
+    else:
+        scope = [dom]
     engines = [e.strip() for e in args.engines.split(",")] if args.engines else list(PROVIDERS)
     sub_src, url_src, ip_src, filt_src = {}, {}, {}, {}
     provider_log, meta = [], {}
@@ -205,12 +238,9 @@ def run(args):
     resolved = resolve_dns(sub_src.keys()) if args.resolve else {}
     for s, ip in resolved.items(): ip_src.setdefault(ip, set()).add(s)
 
-    # scope matching
-    scope = [l.strip().lower() for l in (open(args.scope, encoding="utf-8").read().splitlines() if args.scope else [dom]) if l and not l.startswith("#")]
+    # scope matching — dot-boundary aware, engagement-aligned (see _host_in_scope)
     def in_scope(s):
-        for sc in scope:
-            if s == sc or s.endswith("." + sc) or (sc.startswith("*.") and s.endswith(sc[2:])): return True
-        return False
+        return _host_in_scope(s, scope)
 
     # exports
     def wcsv(name, rows, header):
